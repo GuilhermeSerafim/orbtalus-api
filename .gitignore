@@ -8,6 +8,7 @@
 # Dependências
 node_modules/
 venv/
+.venv/
 __pycache__/
 
 # Logs e temporários
