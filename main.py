@@ -3,9 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers.distance import router as distance_router
 from routers.risk import router as risk_router
 from routers.ai_vertical import router as ai_router
+from database import engine, Base # Importa a estrutura que configuramos
 
-app = FastAPI(title="GeoRisk API")
+# Criação automática das tabelas no PostGIS ao iniciar
+# Isso garante que rios e documentos técnicos estejam prontos no deploy
+Base.metadata.create_all(bind=engine)
 
+app = FastAPI(
+    title="GeoRisk API",
+    description="Plataforma global e agnóstica para análise de risco hidrológico",
+    version="2.0.0"
+)
+
+# Configuração de CORS para integração com seu frontend (Next.js/React)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,17 +24,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# incluir rotas
-app.include_router(distance_router, prefix="/geo")
-app.include_router(risk_router, prefix="/geo")
-app.include_router(ai_router, prefix="/ai")
+# Roteamento Modular
+app.include_router(distance_router, prefix="/geo", tags=["Geoprocessamento"])
+app.include_router(risk_router, prefix="/geo", tags=["Análise de Risco"])
+app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
 
-# ==========================
-# HEALTH / PING ROUTE
-# ==========================
 @app.get("/ping", tags=["Health"])
 def ping():
+    """Rota de verificação para o Cloud Run e monitoramento de saúde."""
     return {
         "status": "ok",
-        "service": "GeoRisk API"
+        "service": "GeoRisk API",
+        "infra": "Agnostic/Multi-cloud",
+        "database": "Connected (PostGIS)"
     }
