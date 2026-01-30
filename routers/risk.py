@@ -15,6 +15,7 @@ router = APIRouter()
 
 osm_service = OSMService()
 
+
 # Dependência para o banco de dados
 def get_db():
     db = SessionLocal()
@@ -84,6 +85,19 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
     )
 
     ai = get_ai_assessment(prompt)
+
+    # 6. PERSISTÊNCIA DO HISTÓRICO
+    assessment = models.RiskAssessment(
+        lat=lat,
+        lon=lon,
+        risk_level=ai.risk_level,
+        explanation=ai.explanation,
+        river_name=rio_nome,
+        distance_m=dist_m,
+    )
+    db.add(assessment)
+    db.commit()
+    db.refresh(assessment)
 
     return {
         "distancia_rio_m": round(dist_m, 1),
