@@ -9,9 +9,11 @@ from database import SessionLocal
 import models
 from services.elevation_service import elevation_m
 from services.ai_service import get_ai_assessment
+from services.osm_service import OSMService
 
 router = APIRouter()
 
+osm_service = OSMService()
 
 # Dependência para o banco de dados
 def get_db():
@@ -32,6 +34,8 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
     geom = shape(req.polygon.get("geometry", req.polygon))
     rep = geom.representative_point()
     lon, lat = rep.x, rep.y
+
+    osm_service.fetch_and_save_rivers(db, lat, lon)
 
     # 2. CONSULTA POSTGIS: Busca o rio mais próximo e o ponto exato de contato
     user_point = f"SRID=4326;POINT({lon} {lat})"
