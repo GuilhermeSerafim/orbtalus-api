@@ -10,6 +10,7 @@ psycopg2-binary
 # Geoprocessamento
 shapely
 requests
+earthengine-api>=0.1.384
 
 # IA & RAG
 langchain

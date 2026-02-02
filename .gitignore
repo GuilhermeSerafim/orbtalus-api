@@ -19,3 +19,7 @@ __pycache__/
 # Build/output
 dist/
 build/
+
+# Google Cloud Run
+georisk-auth.json
+

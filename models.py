@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Boolean
 from geoalchemy2 import Geometry
 from database import Base
 from datetime import datetime
@@ -24,4 +24,8 @@ class RiskAssessment(Base):
     explanation = Column(Text, nullable=False)
     river_name = Column(String, nullable=True)
     distance_m = Column(Float, nullable=True)
+    water_frequency_30y = Column(Integer, nullable=True)
+    soil_type = Column(String, nullable=True)
+    soil_class_id = Column(Integer, nullable=True)  # MapBiomas class ID for audit
+    is_permeable = Column(Boolean, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
