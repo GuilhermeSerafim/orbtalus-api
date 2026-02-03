@@ -23,9 +23,15 @@ def setup_gee():
 
     try:
         import ee
+        from google.oauth2 import service_account
 
-        # Initialize Earth Engine
-        ee.Initialize()
+        # Load service account credentials
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_path, scopes=["https://www.googleapis.com/auth/earthengine"]
+        )
+
+        # Initialize Earth Engine with service account
+        ee.Initialize(credentials=credentials)
 
         print("✅ Google Earth Engine initialized successfully!")
         print(f"   Using credentials: {credentials_path}")
