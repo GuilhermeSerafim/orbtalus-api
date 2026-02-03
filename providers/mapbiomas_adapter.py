@@ -126,14 +126,13 @@ class MapBiomasAdapter(DataProvider):
             # Create point geometry
             point = ee.Geometry.Point([lon, lat])
 
-            # Load MapBiomas Collection 8 (latest year available, e.g., 2022)
-            # Asset ID: "projects/mapbiomas-workspace/public/collection8/mapbiomas_collection80_integration_v1"
+            # Load MapBiomas Collection 8 (Integration)
+            # Using the correct asset path for Collection 8
             collection = ee.Image(
-                "projects/mapbiomas-workspace/public/collection8/mapbiomas_collection80_integration_v1"
+                "projects/mapbiomas-public/assets/brazil/lulc/collection8/mapbiomas_collection80_integration_v1"
             )
 
-            # Get classification for year 2022 (band b2022 or latest available)
-            # Note: Adjust band name based on latest year in collection
+            # Get classification for year 2022 (or latest available)
             class_band = collection.select("classification_2022")
 
             # Sample the pixel at the point
