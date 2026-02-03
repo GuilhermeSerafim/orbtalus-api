@@ -63,10 +63,30 @@ class MapBiomasAdapter(DataProvider):
             return
 
         try:
-            # Try to initialize (assumes credentials are configured)
-            ee.Initialize()
+            import os
+
+            # Check for service account credentials
+            credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+
+            if credentials_path and os.path.exists(credentials_path):
+                # Initialize with service account
+                from google.oauth2 import service_account
+
+                credentials = service_account.Credentials.from_service_account_file(
+                    credentials_path,
+                    scopes=["https://www.googleapis.com/auth/earthengine"],
+                )
+                ee.Initialize(credentials=credentials)
+                logger.info(
+                    f"Google Earth Engine initialized with service account: {credentials_path}"
+                )
+            else:
+                # Try default initialization (oauth or previously authenticated)
+                ee.Initialize()
+                logger.info("Google Earth Engine initialized successfully")
+
             self._initialized = True
-            logger.info("Google Earth Engine initialized successfully")
+
         except Exception as e:
             logger.error(f"Failed to initialize Google Earth Engine: {e}")
             logger.warning("MapBiomasAdapter will return fallback data")
@@ -201,3 +221,46 @@ class MapBiomasAdapter(DataProvider):
         except Exception as e:
             logger.error(f"Error fetching MapBiomas water frequency: {e}")
             return {"frequency_years": 0, "confidence": 0.0}
+
+    def get_elevation(self, lat: float, lon: float) -> Optional[float]:
+        """
+        Fetch elevation data from SRTM (Shuttle Radar Topography Mission) via GEE.
+
+        Args:
+            lat: Latitude
+            lon: Longitude
+
+        Returns:
+            Elevation in meters, or None if unavailable
+        """
+        if not self._initialized:
+            logger.warning(
+                f"GEE not initialized, cannot fetch elevation at ({lat}, {lon})"
+            )
+            return None
+
+        try:
+            point = ee.Geometry.Point([lon, lat])
+
+            # SRTM Digital Elevation Model (30m resolution)
+            srtm = ee.Image("USGS/SRTMGL1_003")
+
+            # Sample elevation at point
+            elevation_data = (
+                srtm.sample(region=point, scale=30, geometries=True)
+                .first()
+                .get("elevation")
+            )
+
+            elevation_m = elevation_data.getInfo()
+
+            if elevation_m is None:
+                logger.warning(f"No SRTM elevation data at ({lat}, {lon})")
+                return None
+
+            logger.debug(f"SRTM elevation at ({lat}, {lon}): {elevation_m}m")
+            return float(elevation_m)
+
+        except Exception as e:
+            logger.error(f"Error fetching SRTM elevation: {e}")
+            return None

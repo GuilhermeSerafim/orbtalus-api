@@ -23,3 +23,9 @@ openai
 # Utilidades
 python-dotenv
 pydantic
+
+# Database migrations
+alembic
+
+# Google Cloud
+google-auth
