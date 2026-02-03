@@ -64,6 +64,10 @@ class MapBiomasAdapter(DataProvider):
 
         try:
             import os
+            from dotenv import load_dotenv
+
+            # Load environment variables
+            load_dotenv()
 
             # Check for service account credentials
             credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
