@@ -194,35 +194,44 @@ class MapBiomasAdapter(DataProvider):
             return {"frequency_years": 0, "confidence": 0.0}
 
         try:
+            logger.debug(f"Fetching water frequency for ({lat}, {lon})")
             point = ee.Geometry.Point([lon, lat])
 
-            # Load MapBiomas Water Collection (30-year frequency)
-            # Asset: "projects/mapbiomas-workspace/public/collection8/mapbiomas_water_collection8_annual_water_coverage_v1"
+            # Load MapBiomas Water Collection 3 (official water frequency dataset)
+            # Asset path: https://brasil.mapbiomas.org/en/water-toolkit/
             water_collection = ee.Image(
-                "projects/mapbiomas-workspace/public/collection8/mapbiomas_water_collection8_water_frequency_v1"
+                "projects/mapbiomas-public/assets/brazil/water/collection3/mapbiomas_water_frequency_v1"
             )
 
-            # Get frequency band (years with water / 30 years)
-            frequency_band = water_collection.select("water_frequency")
+            # Get frequency band (percentage 0-100 representing how often water was present)
+            # Band name for Collection 3: 'water_frequency_1985_2023' (covers 1985-2023)
+            frequency_band = water_collection.select("water_frequency_1985_2023")
 
             # Sample at point
             sample = frequency_band.reduceRegion(
                 reducer=ee.Reducer.first(), geometry=point, scale=30
             )
 
-            frequency_value = sample.get("water_frequency").getInfo()
+            # Get the computed value - this can take a few seconds
+            frequency_value = sample.get("water_frequency_1985_2023").getInfo()
 
             if frequency_value is None:
+                logger.warning(f"No water frequency data at ({lat}, {lon})")
                 return {"frequency_years": 0, "confidence": 0.5}
 
-            # MapBiomas water frequency is typically 0-100 (percentage)
-            # Convert to years (0-30)
+            # MapBiomas water frequency is 0-100 (percentage of years with water)
+            # Convert to years out of 30 (approximate)
             frequency_years = int((frequency_value / 100.0) * 30)
 
+            logger.info(
+                f"Water frequency: {frequency_years} years (from {frequency_value}%)"
+            )
             return {"frequency_years": frequency_years, "confidence": 1.0}
 
         except Exception as e:
-            logger.error(f"Error fetching MapBiomas water frequency: {e}")
+            logger.error(
+                f"Error fetching MapBiomas water frequency: {e}", exc_info=True
+            )
             return {"frequency_years": 0, "confidence": 0.0}
 
     def get_elevation(self, lat: float, lon: float) -> Optional[float]:
