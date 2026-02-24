@@ -11,7 +11,8 @@ Atue como um Engenheiro de Software/Arquiteto de Soluções Sênior. Estou desen
 Aqui está o descritivo técnico detalhado do projeto:
 
 ### 1. Visão Geral da Arquitetura
-O GeoRisk é uma API baseada em microsserviços monoliticos (Modular Monolith) focada em entregar análise de risco hidrológico (alagamentos/deslizamentos) em tempo real, cruzando dados de satélite, dados *on-ground* de terceiros e literatura técnica através de IA Generativa.
+O GeoRisk é uma API baseada na arquitetura **Monolito Modular (Modular Monolith)**. Foi escolhida essa abordagem em vez de Microsserviços puros para evitar a complexidade prematura de deploy e rede, enquanto ainda mantemos o isolamento lógico das regras de negócios. 
+O código é separado em módulos claros (pastas `routers`, `services`, `providers`, `models`), permitindo que a aplicação rode em um único servidor/contêiner (Monolito), mas que possa ser "quebrada" em microsserviços no futuro se o tráfego escalar. O objetivo primário é entregar análise de risco hidrológico em tempo real cruzando satélites, dados on-ground e IA.
 
 - **Linguagem Backend:** Python 3.9+
 - **Framework Web:** FastAPI (alta performance, roteamento assíncrono).
