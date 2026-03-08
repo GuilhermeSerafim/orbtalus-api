@@ -1,15 +1,31 @@
+# Web Framework
 fastapi
 uvicorn
+
+# Database & ORM
+sqlalchemy
+geoalchemy2
+psycopg2-binary
+
+# Geoprocessamento
 shapely
-pyproj
 requests
+earthengine-api>=0.1.384
+
+# IA & RAG
 langchain
 langchain-openai
 langchain-community
 langchain-core
 langchain-text-splitters
 openai
+
+# Utilidades
 python-dotenv
-numpy
 pydantic
-faiss-cpu
+
+# Database migrations
+alembic
+
+# Google Cloud
+google-auth
