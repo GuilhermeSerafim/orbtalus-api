@@ -11,6 +11,7 @@ psycopg2-binary
 shapely
 requests
 earthengine-api>=0.1.384
+overpy
 
 # IA & RAG
 langchain
