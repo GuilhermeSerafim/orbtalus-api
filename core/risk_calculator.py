@@ -68,12 +68,17 @@ class RiskCalculator:
         return (distance_score * 0.6) + (elevation_score * 0.4)
 
     @staticmethod
-    def calculate_water_frequency_score(frequency_years: int) -> float:
+    def calculate_water_frequency_score(
+        frequency_years: int, distance_m: Optional[float] = None
+    ) -> float:
         """
         Calculate water frequency risk score (0-1)
 
-        Based on MapBiomas 30-year water frequency
+        Priority 1: MapBiomas 30-year satellite water frequency
+        Priority 2: PostGIS river proximity as fallback
+                     (handles canalized rivers invisible to satellite)
         """
+        # Priority 1: Use satellite data when available
         if frequency_years >= 20:
             return 1.0  # Flooded 2/3 of the time
         elif frequency_years >= 10:
@@ -84,8 +89,21 @@ class RiskCalculator:
             return 0.4
         elif frequency_years >= 1:
             return 0.2
-        else:
-            return 0.0
+
+        # Priority 2: Proximity fallback when satellite shows 0
+        # Rationale: canalized urban rivers (Tietê, Pinheiros) are
+        # invisible to MapBiomas Water but still pose flood risk
+        if distance_m is not None and frequency_years == 0:
+            if distance_m < 100:
+                return 0.6  # Very close to water body
+            elif distance_m < 300:
+                return 0.4
+            elif distance_m < 500:
+                return 0.2
+            elif distance_m < 1000:
+                return 0.1
+
+        return 0.0
 
     @staticmethod
     def calculate_soil_permeability_score(is_permeable: bool) -> float:
@@ -120,7 +138,9 @@ class RiskCalculator:
         """
         # Calculate individual scores
         topo_score = cls.calculate_topography_score(distance_m, elevation_diff_m)
-        water_score = cls.calculate_water_frequency_score(water_frequency_years)
+        water_score = cls.calculate_water_frequency_score(
+            water_frequency_years, distance_m=distance_m
+        )
         soil_score = cls.calculate_soil_permeability_score(is_permeable)
 
         # Weighted total score

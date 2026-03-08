@@ -176,9 +176,43 @@ class MapBiomasAdapter(DataProvider):
                 "is_permeable": True,
             }
 
+    # Known band names for MapBiomas Water frequency across versions
+    WATER_FREQUENCY_BANDS = [
+        "water_frequency_1985_2023",
+        "frequency",
+        "water_frequency",
+        "water_frequency_1985_2022",
+    ]
+
+    def _detect_water_band(self, image: "ee.Image") -> str:
+        """
+        Auto-detect the correct band name from the MapBiomas Water asset.
+        Tries known names, then falls back to first available band.
+        """
+        available_bands = image.bandNames().getInfo()
+        logger.info(f"MapBiomas Water available bands: {available_bands}")
+
+        for candidate in self.WATER_FREQUENCY_BANDS:
+            if candidate in available_bands:
+                logger.info(f"Using water frequency band: '{candidate}'")
+                return candidate
+
+        # Fallback: use the first band if no known name matches
+        if available_bands:
+            fallback = available_bands[0]
+            logger.warning(
+                f"No known band name found, using first available: '{fallback}'"
+            )
+            return fallback
+
+        raise ValueError("MapBiomas Water image has no bands")
+
     def get_water_frequency(self, lat: float, lon: float) -> WaterData:
         """
         Fetch 30-year water frequency from MapBiomas Water Collection.
+
+        Uses a 1km buffer around the point with max reducer to capture
+        nearby water pixels, since the point itself is typically on land.
 
         Args:
             lat: Latitude
@@ -194,37 +228,45 @@ class MapBiomasAdapter(DataProvider):
             return {"frequency_years": 0, "confidence": 0.0}
 
         try:
-            logger.debug(f"Fetching water frequency for ({lat}, {lon})")
+            logger.info(f"Fetching water frequency for ({lat}, {lon})")
             point = ee.Geometry.Point([lon, lat])
 
+            # Buffer 1km around the point to capture nearby water bodies
+            buffer = point.buffer(1000)
+
             # Load MapBiomas Water Collection 3 (official water frequency dataset)
-            # Asset path: https://brasil.mapbiomas.org/en/water-toolkit/
             water_collection = ee.Image(
                 "projects/mapbiomas-public/assets/brazil/water/collection3/mapbiomas_water_frequency_v1"
             )
 
-            # Get frequency band (percentage 0-100 representing how often water was present)
-            # Band name for Collection 3: 'water_frequency_1985_2023' (covers 1985-2023)
-            frequency_band = water_collection.select("water_frequency_1985_2023")
+            # Auto-detect the correct band name
+            band_name = self._detect_water_band(water_collection)
+            frequency_band = water_collection.select(band_name)
 
-            # Sample at point
+            # Use max reducer within the buffer — captures the highest water
+            # frequency in the surrounding area (e.g. nearby river pixels)
             sample = frequency_band.reduceRegion(
-                reducer=ee.Reducer.first(), geometry=point, scale=30
+                reducer=ee.Reducer.max(),
+                geometry=buffer,
+                scale=30,
+                maxPixels=5000,
             )
 
-            # Get the computed value - this can take a few seconds
-            frequency_value = sample.get("water_frequency_1985_2023").getInfo()
+            # Get the computed value
+            frequency_value = sample.get(band_name).getInfo()
 
             if frequency_value is None:
                 logger.warning(f"No water frequency data at ({lat}, {lon})")
                 return {"frequency_years": 0, "confidence": 0.5}
 
             # MapBiomas water frequency is 0-100 (percentage of years with water)
-            # Convert to years out of 30 (approximate)
-            frequency_years = int((frequency_value / 100.0) * 30)
+            # Convert to years out of 30 — use round() to avoid truncation
+            frequency_pct = float(frequency_value)
+            frequency_years = round((frequency_pct / 100.0) * 30)
 
             logger.info(
-                f"Water frequency: {frequency_years} years (from {frequency_value}%)"
+                f"Water frequency at ({lat}, {lon}): {frequency_years} years "
+                f"(from {frequency_pct:.1f}%, band='{band_name}', buffer=1km)"
             )
             return {"frequency_years": frequency_years, "confidence": 1.0}
 
