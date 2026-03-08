@@ -71,9 +71,10 @@ class MapBiomasAdapter(DataProvider):
 
             # Check for service account credentials
             credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            credentials_json = os.environ.get("GEE_SERVICE_ACCOUNT_JSON")
 
             if credentials_path and os.path.exists(credentials_path):
-                # Initialize with service account
+                # Option 1: Local file path (development)
                 from google.oauth2 import service_account
 
                 credentials = service_account.Credentials.from_service_account_file(
@@ -82,12 +83,24 @@ class MapBiomasAdapter(DataProvider):
                 )
                 ee.Initialize(credentials=credentials)
                 logger.info(
-                    f"Google Earth Engine initialized with service account: {credentials_path}"
+                    f"GEE initialized with service account file: {credentials_path}"
                 )
+            elif credentials_json:
+                # Option 2: JSON string (Cloud Run / production)
+                import json
+                from google.oauth2 import service_account
+
+                info = json.loads(credentials_json)
+                credentials = service_account.Credentials.from_service_account_info(
+                    info,
+                    scopes=["https://www.googleapis.com/auth/earthengine"],
+                )
+                ee.Initialize(credentials=credentials)
+                logger.info("GEE initialized with inline JSON credentials (Cloud Run)")
             else:
-                # Try default initialization (oauth or previously authenticated)
+                # Option 3: Default (ADC or previously authenticated)
                 ee.Initialize()
-                logger.info("Google Earth Engine initialized successfully")
+                logger.info("GEE initialized with default credentials")
 
             self._initialized = True
 
