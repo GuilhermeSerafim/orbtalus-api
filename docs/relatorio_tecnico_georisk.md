@@ -1,89 +1,158 @@
-# Relatório Técnico: Varredura GeoRisk e Futuras Implementações
+# Relatório Técnico: Arquitetura e Motor de Risco do GeoRisk
 
-## 1. Estado Atual do Projeto (Varredura)
-
-### 1.1. Arquitetura Geral
-O projeto **GeoRisk** é uma aplicação backend desenvolvida em **Python** utilizando o framework **FastAPI**. A estrutura é modular e organizada, seguindo boas práticas de "Vertical Slice" ou arquitetura em camadas:
-
-- **`core/`**: Configurações e utilitários básicos.
-- **`routers/`**: Definição dos endpoints da API.
-- **`services/`**: Lógica de negócio (ex: `ai_service.py`, `water_service.py`).
-- **`providers/`**: Integrações com fontes de dados externas (Adapters).
-- **`data/`**: Armazenamento de arquivos estáticos/texto para contexto da IA.
-
-### 1.2. Inteligência Artificial (Atual)
-A implementação atual de IA (`ai_vertical.py` e `services/ai_service.py`) utiliza o padrão **RAG (Retrieval-Augmented Generation)**:
-- **Framework**: LangChain.
-- **Modelo**: OpenAI (`gpt-4o`).
-- **Contexto**: A IA responde perguntas baseada exclusivamente em dois arquivos de texto estáticos:
-    - `flood_risk_brazil.txt`
-    - `bart_flood_model.txt` (Artigo científico sobre modelo BART para inundações).
-- **Embeddings**: `text-embedding-3-small` da OpenAI.
-- **Funcionamento**: O sistema busca trechos relevantes nos textos acima e os envia ao GPT-4o para gerar uma resposta ou avaliação de risco (`RiskAssessment`).
-
-### 1.3. Integrações de Dados (Providers)
-- **MapBiomas**: Implementado (`mapbiomas_adapter.py`), parece funcional para obter dados de uso do solo.
-- **Nottus**: Existe um arquivo `nottus_adapter.py`, mas atualmente opera em modo **PLACEHOLDER (Mock)**. Ele retorna dados fictícios baseados nas coordenadas geográficas (paridade de latitude/longitude).
+**Última atualização:** 08/03/2026
 
 ---
 
-## 2. Futuras Implementações
+## 1. Arquitetura Geral
 
-Conforme solicitado, segue a análise situacional e plano para **SAR**, **InSAR** e **Melhoria da IA com Nottus**.
+O GeoRisk é uma API backend em **Python/FastAPI** com arquitetura **Monolito Modular**:
 
-### 2.1. SAR (Synthetic Aperture Radar)
-**Estado Atual**:
-- A única menção a SAR no projeto está no arquivo `bart_flood_model.txt`, referenciando o uso de dados "PALSAR" para gerar Modelos Digitais de Elevação (DEM). Não há código de processamento de radar implementado.
+```
+core/           → Motor de cálculo (RiskCalculator)
+routers/        → Endpoints da API (/geo/risk, /geo/distance)
+services/       → Lógica de negócio (IA, OSM, elevação)
+providers/      → Integrações externas (MapBiomas, Nottus)
+models.py       → Modelos SQLAlchemy (WaterBody, RiskAssessment)
+```
 
-**Plano de Implementação**:
-O SAR é essencial para monitoramento de inundações (pois "vê" através de nuvens) e umidade do solo.
-1.  **Aquisição de Dados**: Integrar com Sentinel-1 (ESA) via API (ex: `sentinelsat` ou `asf_search`).
-2.  **Processamento**: Implementar pipeline de pré-processamento (Calibração Radiométrica, Filtro de Speckle, Correção de Terreno).
-3.  **Aplicação**:
-    - **Detecção de Água**: Thresholding em imagens VH/VV para identificar corpos d'água em tempo real.
-    - **Umidade do Solo**: Estimativa baseada na retroespalhamento (backscatter).
+### Stack de Integração
 
-### 2.2. InSAR (Interferometria SAR)
-**Estado Atual**:
-- Não há menções ou implementações no código atual.
-
-**Plano de Implementação**:
-O InSAR é utilizado para detectar deformações milimétricas no solo (ex: deslizamentos, subsidência).
-1.  **Complexidade**: O processamento bruto de InSAR (geração de interferogramas a partir de pares de imagens SLC) é computacionalmente intensivo e complexo para ser feito "on-the-fly" em uma API Python simples.
-2.  **Estratégia Recomendada**: Consumir produtos já processados (Nível 3) de serviços como o **EGMS (European Ground Motion Service)** ou processar offline usando ferramentas como **SNAP** ou **ISCE2** e servir apenas os resultados (mapas de velocidade de deformação) via API GeoRisk.
-
-### 2.3. Melhoria da IA com Dados da Nottus
-**Objetivo**: Tornar a avaliação de risco da IA mais precisa usando dados reais da Nottus (ao invés de apenas textos genéricos).
-
-**Estratégia de Implementação**:
-1.  **Integração Real (Adapter)**:
-    - Substituir o `NottusAdapter` mockado por chamadas reais à API da Nottus.
-    - Capturar dados estruturados: *Tipo de Solo*, *Permeabilidade*, *Histórico de Inundações*, *Pluviometria*.
-2.  **Enriquecimento de Contexto (Context Injection/RAG Avançado)**:
-    - Atualmente, o prompt da IA recebe apenas trechos de texto (`{context}`).
-    - **Novo Fluxo**:
-        - O usuário envia coordenadas (Lat/Lon).
-        - O sistema consulta o `NottusAdapter` e obtém os dados locais.
-        - O prompt é montado dinamicamente:
-          ```text
-          Contexto Local (Dados Nottus):
-          - Solo: Argiloso (Permeabilidade Baixa)
-          - Histórico: 2 inundações nos últimos 5 anos
-          - Chuva Recente: 50mm
-
-          Contexto Teórico (RAG):
-          [Trechos do bart_flood_model.txt...]
-
-          Pergunta: Qual o risco de alagamento hoje?
-          ```
-    - Isso permite que a IA combine o *conhecimento teórico* (dos textos) com a *realidade local* (da Nottus).
-3.  **Fine-Tuning (Longo Prazo)**:
-    - Se houver um dataset histórico de "Dados Nottus" + "Ocorrência Real de Sinistro", podemos fazer o fine-tuning de um modelo (ex: GPT-4o-mini) para se especializar nessa correlação.
+```
+PostGIS (Supabase) ← rios e histórico
+       ↕
+OpenStreetMap (Overpass API) ← waterways + relations
+       ↕
+Google Earth Engine ← MapBiomas Collection 8 (solo) + Water Collection 3 (frequência)
+       ↕
+Open-Elevation API ← SRTM 30m
+       ↕
+RiskCalculator ← algoritmo ponderado (topo 50% / água 30% / solo 20%)
+       ↕
+GPT-4 (LangChain RAG) ← laudo técnico enriquecido
+       ↕
+FastAPI ← endpoint /geo/risk (audit-ready JSON)
+```
 
 ---
 
-## 3. Próximos Passos Sugeridos
+## 2. Fluxo do Endpoint `/geo/risk`
 
-1.  **Imediato**: Implementar a conexão real com a API da Nottus (assim que chaves/docs estiverem disponíveis).
-2.  **Curto Prazo**: Alterar o `ai_service.py` para injetar os dados estruturados do Adapter no prompt da IA.
-3.  **Médio Prazo**: Criar um módulo `services/sar_service.py` para baixar e processar imagens Sentinel-1 para áreas críticas.
+1. Recebe polígono GeoJSON, calcula ponto representativo (Shapely).
+2. Busca/cacheia rios próximos via Overpass (OSM) → PostGIS.
+3. Consulta PostGIS: corpo d'água mais próximo, distância e ponto de contato.
+4. Consulta elevação no ponto do usuário e no ponto do rio (SRTM), gerando queda relativa.
+5. Consulta dados ambientais (solo e frequência de água) via MapBiomas/GEE.
+6. Executa `RiskCalculator` (motor determinístico ponderado).
+7. Gera laudo técnico via IA (GPT-4 + contexto RAG).
+8. Persiste histórico em `risk_assessments`.
+
+---
+
+## 3. Fórmula de Risco
+
+### 3.1 Score Total
+
+`total = topografia × 0.50 + água × 0.30 + solo × 0.20`
+
+### 3.2 Topografia (sub-score)
+
+`topografia = distância × 0.60 + elevação × 0.40`
+
+| Distância | Score | Elevação | Score |
+|---|---|---|---|
+| < 50m | 1.0 | < -2m (abaixo do rio) | 1.0 |
+| < 100m | 0.8 | < 0m | 0.9 |
+| < 200m | 0.5 | < 2m | 0.7 |
+| < 500m | 0.3 | < 5m | 0.4 |
+| ≥ 500m | 0.1 | ≥ 5m | 0.1 |
+
+### 3.3 Frequência de Água
+
+**Prioridade 1:** Dados de satélite MapBiomas (30 anos)
+
+| Anos com água | Score |
+|---|---|
+| ≥ 20 | 1.0 |
+| ≥ 10 | 0.8 |
+| ≥ 5 | 0.6 |
+| ≥ 2 | 0.4 |
+| ≥ 1 | 0.2 |
+
+**Prioridade 2 (fallback):** Quando satélite retorna 0 (rios canalizados), usa distância PostGIS:
+
+| Distância | Score inferido |
+|---|---|
+| < 100m | 0.6 |
+| < 300m | 0.4 |
+| < 500m | 0.2 |
+| < 1000m | 0.1 |
+
+### 3.4 Solo (Permeabilidade)
+
+| Tipo | Score |
+|---|---|
+| Impermeável (urbano, mineração) | 1.0 |
+| Permeável (floresta, pastagem) | 0.0 |
+
+### 3.5 Classificação Final
+
+| Score | Nível |
+|---|---|
+| ≥ 0.7 | 🔴 Alto |
+| ≥ 0.4 | 🟡 Médio |
+| < 0.4 | 🟢 Baixo |
+
+---
+
+## 4. Integrações Externas (Adapter Pattern)
+
+### MapBiomas (Implementado)
+- **Solo:** Collection 8, banda `classification_2022`, resolução 30m.
+- **Água:** Water Collection 3, buffer 1km com `Reducer.max()`, auto-detecção de banda.
+
+### OSM / Overpass (Implementado)
+- Query `way["waterway"]` + `relation["waterway"]` com raio de 5km.
+- Processamento de relations para capturar nomes de rios grandes.
+- Cache em PostGIS (>5 rios no raio = área já mapeada).
+
+### Nottus (Placeholder)
+- `NottusAdapter` retorna mock data, pronto para plugar API real.
+
+### SAR/InSAR (Roadmap)
+- Sentinel-1 para detecção de água real-time e deformação do solo.
+
+---
+
+## 5. Pontos Fortes
+
+1. **Explicável e auditável:** regras explícitas, pesos fixos, IA justifica.
+2. **Arquitetura limpa:** cálculo isolado em `core/`, providers desacoplados.
+3. **Degradação controlada:** continua operando com fallback em caso de falha.
+4. **Resposta rica:** score total, sub-scores, pesos e laudo em um JSON.
+
+## 6. Limitações Conhecidas
+
+1. **Elevação `0` tratada como `None`** — regiões ao nível do mar perdem dado topográfico.
+2. **Solo binário** — não diferencia parque de asfalto dentro de "Área Urbanizada".
+3. **SRTM 30m** — micro-topografia urbana pode ter erro de ±10m.
+4. **Cobertura OSM** — depende de mapeamento voluntário.
+5. **Sem fallback para falha da IA** — se GPT-4 falhar, endpoint retorna erro.
+
+## 7. Recomendações para Produção
+
+### Curto prazo
+- Trocar `if elev and ...` por checagem `is not None`
+- Fallback textual quando IA falhar
+- Versionar modelo de risco (`risk_model_version`)
+
+### Médio prazo
+- SAR (Sentinel-1) via GEE para water frequency real-time
+- SRTM → LIDAR (resolução 1m)
+- ANA (hidrografia oficial) para substituir OSM
+- Solo granular (escala contínua 0-1)
+
+### Longo prazo
+- InSAR como 4º componente (subsidência/deformação)
+- Calibração empírica com dados de sinistro real
+- Fine-tuning de modelo IA com histórico de risco
