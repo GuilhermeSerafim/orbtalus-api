@@ -165,6 +165,9 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
                 "confidence": water_data.get("confidence"),
             },
             "data_source": data_provider.name,
+            "provider_status": "OK"
+            if "Indisponível" not in soil_data.get("class_name", "")
+            else "DEGRADED_USING_FALLBACK",
         },
         "debug_coords": {"rio_lat": rio_lat, "rio_lon": rio_lon},
     }
