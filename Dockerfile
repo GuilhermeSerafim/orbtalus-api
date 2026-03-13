@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 # Instala dependências de sistema para Geoprocessamento e Banco de Dados
 RUN apt-get update && apt-get install -y \
@@ -11,10 +11,10 @@ WORKDIR /app
 
 # Copia e instala as dependências do Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # Copia o código fonte
 COPY . .
 
 # Inicia o servidor usando a porta dinâmica do Cloud Run ($PORT)
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+CMD python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}

@@ -1,6 +1,6 @@
 # GeoRisk Backend
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-PostGIS-336791?logo=postgresql&logoColor=white)
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-ORM-D71F00)
@@ -43,7 +43,7 @@ Main backend flow for `POST /geo/risk`:
 
 | Category | Technologies |
 | --- | --- |
-| Language | Python 3.9+ |
+| Language | Python 3.12 |
 | API | FastAPI, Uvicorn, Pydantic |
 | ORM and database | SQLAlchemy, GeoAlchemy2, PostgreSQL, PostGIS, psycopg2-binary |
 | Migrations | Alembic |
@@ -131,7 +131,7 @@ geo-risk-back/
 
 ### Prerequisites
 
-- Python 3.9 or newer
+- Python 3.12
 - Docker and Docker Compose
 - An OpenAI API key
 - A PostgreSQL/PostGIS connection string
@@ -142,7 +142,7 @@ geo-risk-back/
 Run the commands below from `geo-risk-back/`:
 
 ```bash
-python -m venv .venv
+py -3.12 -m venv .venv
 
 # Windows
 .venv\Scripts\Activate.ps1
@@ -150,7 +150,7 @@ python -m venv .venv
 # Linux / macOS
 source .venv/bin/activate
 
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 docker compose up -d db
 ```
 
@@ -295,7 +295,7 @@ Example `POST /ai/ask-ai` request:
 
 - `main.py` creates tables automatically with `Base.metadata.create_all(bind=engine)`.
 - Alembic is available in the repository for schema evolution.
-- The Docker image uses `python:3.9-slim` and starts Uvicorn with `main:app`.
+- The Docker image uses `python:3.12-slim` and starts Uvicorn with `python -m uvicorn main:app`.
 - `test_risk_api.py` is a manual smoke-test script for the `/geo/risk` endpoint.
 
 ## Contributing
