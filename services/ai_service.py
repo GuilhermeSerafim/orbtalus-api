@@ -42,7 +42,7 @@ def get_ai_assessment(question: str) -> RiskAssessment:
         return "\n\n".join([doc_texts[i] for i in top_k])
     # ===================================================
 
-    llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
 
     # Enforce JSON estruturado com o schema do Pydantic
     structured_llm = llm.with_structured_output(RiskAssessment)

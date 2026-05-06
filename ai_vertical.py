@@ -74,7 +74,7 @@ prompt_template = PromptTemplate(
 )
 
 # --------- LLM + pipeline (runnables) ----------
-llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 output_parser = StrOutputParser()
 
 qa_chain = (

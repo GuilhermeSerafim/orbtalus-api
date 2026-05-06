@@ -4,7 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-PostGIS-336791?logo=postgresql&logoColor=white)
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-ORM-D71F00)
-![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991?logo=openai&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)
 ![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-MapBiomas-4285F4)
 
 GeoRisk Backend is the API layer behind GeoRisk. The service receives a GeoJSON polygon, queries hydrological context in PostGIS, enriches the analysis with elevation and environmental data, runs a weighted flood-risk calculation, and stores the assessment history.
@@ -50,7 +50,7 @@ Main backend flow for `POST /geo/risk`:
 | Geospatial processing | Shapely, PostGIS spatial functions |
 | OSM integration | OpenStreetMap, Overpass API, Overpy |
 | Environmental data | Open-Meteo Elevation API, Google Earth Engine, MapBiomas |
-| AI and RAG | OpenAI API (`gpt-4o`, `text-embedding-3-small`), LangChain, langchain-openai, langchain-core, langchain-community, langchain-text-splitters, NumPy |
+| AI and RAG | OpenAI API (`gpt-4o-mini`, `text-embedding-3-small`), LangChain, langchain-openai, langchain-core, langchain-community, langchain-text-splitters, NumPy |
 | Configuration and auth | python-dotenv, google-auth |
 | Infrastructure | Docker, Docker Compose, Cloud Run-ready container entrypoint |
 
