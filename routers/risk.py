@@ -1,16 +1,17 @@
 import logging
-import re
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from shapely.geometry import shape
+from fastapi import APIRouter, Depends
+from shapely.geometry import Polygon
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import models
 from core import RiskCalculator
-from database import SessionLocal
-from providers import MapBiomasAdapter, NottusAdapter
+from core.errors import ServiceUnavailable
+from core.geometry import get_geo_db, validated_polygon, river_coordinates
+from core.validation import finite_number, nonnegative_distance
+from providers import MapBiomasAdapter
+from providers.mapbiomas_adapter import MAPBIOMAS_SOIL_CLASSES
 from services.ai_service import get_ai_assessment
 from services.elevation_service import elevation_m
 from services.osm_service import OSMService
@@ -19,37 +20,23 @@ from services.text_sanitizer import sanitize_text
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-osm_service = OSMService()
-
-# Initialize data provider (can be switched via config)
-try:
-    data_provider = MapBiomasAdapter(initialize_gee=True)
-except Exception as e:
-    print(f"Warning: MapBiomas initialization failed, using Nottus fallback: {e}")
-    data_provider = NottusAdapter()
+def get_data_provider():
+    return MapBiomasAdapter(initialize_gee=True)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-class DistanceReq(BaseModel):
-    polygon: dict
+def get_osm_service():
+    return OSMService()
 
 
 @router.post("/risk")
-def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
+def risk_api(geom: Polygon = Depends(validated_polygon),
+             db: Session = Depends(get_geo_db, scope="function")):
     # 1. Initial geospatial processing
-    geom = shape(req.polygon.get("geometry", req.polygon))
     rep = geom.representative_point()
     lon, lat = rep.x, rep.y
 
     # OSM enrichment is best effort and uses its own transaction.
-    osm_service.fetch_and_save_rivers(lat, lon)
+    get_osm_service().fetch_and_save_rivers(lat, lon)
 
     # 2. Query PostGIS for nearest water body and closest contact point.
     user_point = f"SRID=4326;POINT({lon} {lat})"
@@ -66,12 +53,10 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
     )
 
     if not result:
-        raise HTTPException(
-            status_code=404,
-            detail="Nenhum corpo d'\u00e1gua encontrado na base de dados.",
-        )
+        raise ServiceUnavailable('DATA_UNAVAILABLE')
 
     rio, dist_m, rio_ponto_wkt = result
+    dist_m = nonnegative_distance(dist_m)
     rio_nome = (
         sanitize_text(
             rio.name,
@@ -92,26 +77,32 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
     )
 
     # 3. Extract river coordinates for elevation lookup.
-    coords = re.findall(r"[-+]?\d*\.\d+|\d+", rio_ponto_wkt)
-    rio_lon, rio_lat = float(coords[0]), float(coords[1])
+    rio_lon, rio_lat = river_coordinates(rio_ponto_wkt)
 
     # 4. Topography analysis.
-    elev_ponto = elevation_m(lat, lon)
-    elev_rio = elevation_m(rio_lat, rio_lon)
-    queda_rel = (elev_ponto - elev_rio) if elev_ponto and elev_rio else None
+    elev_ponto = finite_number(elevation_m(lat, lon))
+    elev_rio = finite_number(elevation_m(rio_lat, rio_lon))
+    queda_rel = finite_number(elev_ponto - elev_rio)
 
     # 5. Environmental data (provider pattern).
-    try:
-        soil_data = data_provider.get_soil_data(lat, lon)
-        water_data = data_provider.get_water_frequency(lat, lon)
-    except Exception as e:
-        print(f"Provider error: {e}")
-        soil_data = {
-            "class_id": 0,
-            "class_name": "Indispon\u00edvel",
-            "is_permeable": True,
-        }
-        water_data = {"frequency_years": 0, "confidence": 0.0}
+    data_provider = get_data_provider()
+    soil_data = data_provider.get_soil_data(lat, lon)
+    water_data = data_provider.get_water_frequency(lat, lon)
+
+    if not isinstance(soil_data, dict) or not isinstance(water_data, dict):
+        raise ServiceUnavailable('DATA_UNAVAILABLE')
+    class_id = finite_number(soil_data.get('class_id'))
+    known_soil = MAPBIOMAS_SOIL_CLASSES.get(class_id)
+    if (known_soil is None or type(soil_data.get('is_permeable')) is not bool
+            or soil_data['is_permeable'] != known_soil['is_permeable']):
+        raise ServiceUnavailable('DATA_UNAVAILABLE')
+    years = finite_number(water_data.get('frequency_years'))
+    confidence = finite_number(water_data.get('confidence'))
+    if not years.is_integer() or not 0 <= years <= 30 or not 0 <= confidence <= 1:
+        raise ServiceUnavailable('DATA_UNAVAILABLE')
+    if not isinstance(soil_data.get('class_name'), str) or not soil_data['class_name'].strip():
+        raise ServiceUnavailable('DATA_UNAVAILABLE')
+    soil_data = dict(soil_data)
 
     soil_data["class_name"] = (
         sanitize_text(
@@ -120,8 +111,9 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
             logger=logger,
             context="risk.provider",
         )
-        or "Indisponivel"
     )
+    if not soil_data['class_name']:
+        raise ServiceUnavailable('DATA_UNAVAILABLE')
 
     # 6. Business risk calculation.
     risk_result = RiskCalculator.calculate_risk(
@@ -156,12 +148,16 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
     )
 
     ai = get_ai_assessment(prompt)
+    if not isinstance(ai.explanation, str):
+        raise ServiceUnavailable('AI_UNAVAILABLE')
     ai_explanation = sanitize_text(
         ai.explanation,
         field_name="explanation",
         logger=logger,
         context="risk.assessment",
     )
+    if not isinstance(ai_explanation, str) or not ai_explanation.strip():
+        raise ServiceUnavailable('AI_UNAVAILABLE')
 
     # 8. Persist request history.
     assessment = models.RiskAssessment(
@@ -176,12 +172,8 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
         soil_class_id=soil_data.get("class_id"),
         is_permeable=soil_data["is_permeable"],
     )
-    db.add(assessment)
-    db.commit()
-    db.refresh(assessment)
-
-    # 9. Enriched response.
-    return {
+    # Prepare the original response before the commit; no refresh is needed.
+    response = {
         "distancia_rio_m": round(dist_m, 1),
         "queda_relativa_m": round(queda_rel, 1) if queda_rel is not None else None,
         "rio_mais_proximo": rio_nome,
@@ -205,11 +197,11 @@ def risk_api(req: DistanceReq, db: Session = Depends(get_db)):
                 "confidence": water_data.get("confidence"),
             },
             "data_source": data_provider.name,
-            "provider_status": (
-                "OK"
-                if "Indispon" not in soil_data.get("class_name", "")
-                else "DEGRADED_USING_FALLBACK"
-            ),
+            "provider_status": "OK",
         },
         "debug_coords": {"rio_lat": rio_lat, "rio_lon": rio_lon},
     }
+    db.add(assessment)
+    db.commit()
+    db.info['risk_assessment_committed'] = True
+    return response

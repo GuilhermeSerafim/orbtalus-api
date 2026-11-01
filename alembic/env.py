@@ -13,10 +13,6 @@ from pathlib import Path
 # Add parent directory to path to import our modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 # Import models for autogenerate
 from database import Base
 import models  # This imports all models
@@ -25,10 +21,12 @@ import models  # This imports all models
 # access to the values within the .ini file in use.
 config = context.config
 
-# Override sqlalchemy.url with DATABASE_URL from .env
+# Historical migrations require explicit configuration; no dotenv or ini fallback.
 database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+if not database_url:
+    raise ValueError('DATABASE_URL must be supplied explicitly for historical Alembic operations')
+# ConfigParser requires percent escaping, e.g. percent-encoded passwords.
+config.set_main_option("sqlalchemy.url", database_url.replace('%', '%%'))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

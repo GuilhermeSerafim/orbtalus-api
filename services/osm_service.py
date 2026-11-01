@@ -13,24 +13,26 @@ logger = logging.getLogger(__name__)
 
 class OSMService:
     def __init__(self):
-        self.api = overpy.Overpass()
+        self.api = None
 
     def fetch_and_save_rivers(self, lat: float, lon: float, radius_km: int = 5):
-        db = SessionLocal()
+        db = None
         try:
+            db = SessionLocal()
             self._fetch_and_save_rivers(db, lat, lon, radius_km)
-        except Exception as e:
-            db.rollback()
-            logger.error(
-                "Error fetching OSM data near (%s, %s): %s",
-                lat,
-                lon,
-                e,
-                exc_info=True,
-            )
-            print(f"Erro ao buscar dados do OSM: {e}")
+        except Exception:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    logger.warning('OSM cache rollback failed')
+            logger.warning('OSM enrichment unavailable; retaining existing hydrology')
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    logger.warning('OSM cache close failed')
 
     def _fetch_and_save_rivers(
         self, db: Session, lat: float, lon: float, radius_km: int = 5
@@ -67,6 +69,8 @@ class OSMService:
         >;
         out skel qt;
         """
+        if self.api is None:
+            self.api = overpy.Overpass()
         result = self.api.query(query)
 
         # 3. Build relation name/type lookup for member ways.

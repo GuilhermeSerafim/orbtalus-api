@@ -4,6 +4,8 @@
 .env.development
 .env.test
 .env.production
+.env.*
+!.env.example
 
 # Dependências
 node_modules/
@@ -23,3 +25,9 @@ build/
 # Google Cloud Run
 georisk-auth.json
 
+
+# Local controller/worker preparation, not product delivery
+/.tools/
+/.venv/
+/scripts/ralph/
+/scripts/run-ralph.ps1
