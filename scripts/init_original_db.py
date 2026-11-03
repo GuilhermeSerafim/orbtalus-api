@@ -26,8 +26,9 @@ def _type_name(column_type):
 def _default(value):
     if value is None:
         return None
-    # Canonical qualification only; no removal of expressions or other defaults.
-    return re.sub(r"nextval\('public\.([a-z_]+)'::regclass\)", r"nextval('\1'::regclass)", str(value))
+    # Canonical public qualification only, for the entire nextval default.
+    return re.sub(r"\Anextval\('(?:public|\"public\")\.([a-z_]+)'::regclass\)\Z",
+                  r"nextval('\1'::regclass)", str(value))
 
 
 def expected_manifest():

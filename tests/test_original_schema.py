@@ -24,6 +24,45 @@ class OriginalSchemaTests(unittest.TestCase):
         from scripts import init_original_db
         return init_original_db
 
+    def test_quoted_public_defaults_match_original_sequences(self):
+        baseline = self.baseline()
+        for sequence in ('risk_assessments_id_seq', 'water_bodies_id_seq'):
+            with self.subTest(sequence=sequence):
+                self.assertEqual(baseline._default(f"nextval('\"public\".{sequence}'::regclass)"),
+                                 f"nextval('{sequence}'::regclass)")
+
+    def test_default_preserves_canonical_and_unrelated_values(self):
+        baseline = self.baseline()
+        for sequence in ('risk_assessments_id_seq', 'water_bodies_id_seq'):
+            canonical = f"nextval('{sequence}'::regclass)"
+            for value in (canonical, f"nextval('public.{sequence}'::regclass)"):
+                with self.subTest(value=value):
+                    self.assertEqual(baseline._default(value), canonical)
+        for value in (None, 'now()', '7', "'public.example'::text", ''):
+            with self.subTest(value=value):
+                self.assertEqual(baseline._default(value), value)
+
+    def test_default_does_not_equate_other_schemas_sequences_or_expressions(self):
+        baseline = self.baseline()
+        for sequence in ('risk_assessments_id_seq', 'water_bodies_id_seq'):
+            canonical = f"nextval('{sequence}'::regclass)"
+            for schema in ('private.', '"private".', '"Public".', '"PUBLIC".',
+                           '"public.', 'public".'):
+                value = f"nextval('{schema}{sequence}'::regclass)"
+                with self.subTest(value=value):
+                    self.assertEqual(baseline._default(value), value)
+                    self.assertNotEqual(baseline._default(value), canonical)
+            for schema in ('', 'public.', '"public".'):
+                different = f"nextval('{schema}different_id_seq'::regclass)"
+                with self.subTest(value=different):
+                    self.assertNotEqual(baseline._default(different), canonical)
+                qualified = f"nextval('{schema}{sequence}'::regclass)"
+                for value in (qualified + ' + 1', '1 + ' + qualified,
+                              f'coalesce({qualified}, 1)', qualified + '::text'):
+                    with self.subTest(value=value):
+                        self.assertEqual(baseline._default(value), value)
+                        self.assertNotEqual(baseline._default(value), canonical)
+
     def test_target_mismatch_and_connection_overrides_refused_before_engine(self):
         baseline = self.baseline()
         for url in (None, URL.replace('55442', '5432'), URL.replace('disposable_test', 'preview'),
@@ -163,7 +202,9 @@ class OriginalSchemaTests(unittest.TestCase):
         expected = baseline.expected_manifest()
         inspector = MagicMock()
         inspector.get_columns.side_effect = lambda name, schema: [
-            {**c, 'type': Base.metadata.tables[name].c[c['name']].type}
+            {**c, 'type': Base.metadata.tables[name].c[c['name']].type,
+             'default': c['default'].replace("nextval('", f"nextval('{qualification}")
+             if c['default'] else None}
             for c in expected['tables'][name]['columns']]
         inspector.get_pk_constraint.side_effect = lambda name, schema: {
             'name': expected['tables'][name]['primary_key']['name'], 'constrained_columns': ['id']}
@@ -176,7 +217,9 @@ class OriginalSchemaTests(unittest.TestCase):
         connection = MagicMock()
         connection.execute.return_value.mappings.return_value = expected['sequences']
         with patch.object(baseline, 'inspect', return_value=inspector):
-            self.assertEqual(baseline.read_manifest(connection), expected)
+            for qualification in ('public.', '"public".', ''):
+                with self.subTest(qualification=qualification):
+                    self.assertEqual(baseline.read_manifest(connection), expected)
             for option in ('postgresql_invalid', 'postgresql_nulls_not_distinct'):
                 with self.subTest(option=option):
                     original_indexes = inspector.get_indexes.side_effect
