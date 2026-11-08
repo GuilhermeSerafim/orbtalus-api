@@ -1,4 +1,4 @@
-# GeoRisk Backend
+# OrbTalus (GeoRisk) — Backend
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white)
@@ -7,14 +7,16 @@
 ![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)
 ![Google Earth Engine](https://img.shields.io/badge/Google%20Earth%20Engine-MapBiomas-4285F4)
 
-GeoRisk Backend is the API layer behind GeoRisk. The service receives a GeoJSON polygon, queries hydrological context in PostGIS, enriches the analysis with elevation and environmental data, runs a weighted flood-risk calculation, and stores the assessment history.
+This is the API layer of **OrbTalus (GeoRisk)**, a geospatial research prototype for preliminary environmental-risk screening. The service receives a GeoJSON polygon, queries hydrological context in PostGIS, enriches the analysis with elevation and environmental data, runs a weighted flood-risk calculation, and stores the assessment history.
+
+Outputs are exploratory, not validated predictions or a comprehensive assessment of a property or region. Available data and provider coverage limit the results. A placeholder fallback is not an environmental observation and must not be presented as one.
 
 The current backend is no longer just a simple FastAPI + LLM service. It also includes:
 
 - PostGIS persistence for water bodies and analysis history
 - Runtime enrichment from OpenStreetMap via Overpass
 - Environmental providers through Google Earth Engine and MapBiomas
-- Fallback provider support when GEE is unavailable
+- Internal fallback values when GEE/data is unavailable, plus a placeholder Nottus adapter
 - Dockerized database infrastructure and Alembic migrations
 
 ## Project overview
@@ -52,7 +54,7 @@ Main backend flow for `POST /geo/risk`:
 | Environmental data | Open-Meteo Elevation API, Google Earth Engine, MapBiomas |
 | AI and RAG | OpenAI API (`gpt-4o-mini`, `text-embedding-3-small`), LangChain, langchain-openai, langchain-core, langchain-community, langchain-text-splitters, NumPy |
 | Configuration and auth | python-dotenv, google-auth |
-| Infrastructure | Docker, Docker Compose, Cloud Run-ready container entrypoint |
+| Infrastructure | Docker, Docker Compose; container entrypoint reads `PORT` |
 
 ## Architecture overview
 
@@ -88,7 +90,7 @@ Client
 ## Project structure
 
 ```text
-geo-risk-back/
+orbtalus-api/
 ├── alembic/
 ├── core/
 │   ├── __init__.py
@@ -139,9 +141,11 @@ geo-risk-back/
 
 ### Local setup
 
-Run the commands below from `geo-risk-back/`:
+The repository is private; cloning requires access. Clone it and run the commands from `orbtalus-api/`:
 
 ```bash
+git clone https://github.com/GuilhermeSerafim/orbtalus-api.git
+cd orbtalus-api
 py -3.12 -m venv .venv
 
 # Windows
@@ -169,15 +173,18 @@ Create a `.env` file in the backend root:
 Example:
 
 ```bash
-DATABASE_URL=postgresql://admin:georisk_pass@localhost:5432/georisk_db
-OPENAI_API_KEY=sk-proj-your_key_here
+DATABASE_URL="postgresql://<DB_USER>:<DB_PASSWORD>@localhost:5432/<DB_NAME>"
+OPENAI_API_KEY="<YOUR_OPENAI_API_KEY>"
 GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\georisk-auth.json
 ```
 
 Notes:
 
 - Configure either `GOOGLE_APPLICATION_CREDENTIALS` or `GEE_SERVICE_ACCOUNT_JSON` for MapBiomas.
-- If Earth Engine initialization fails, the API falls back to `NottusAdapter`, which currently returns placeholder data.
+- In this published version, Earth Engine initialization does not pass an explicit project to `ee.Initialize`; project selection depends on the credential/default configuration.
+- `MapBiomasAdapter` catches initialization failures internally and returns fallback values. The router selects `NottusAdapter` only if adapter construction raises out to the router; Nottus returns coordinate-derived mock data, not observations.
+- Missing data or query failures can produce class 0, assumed permeability and zero water frequency. When water frequency is zero, the risk calculator can use distance-to-river thresholds instead. These fallbacks do not establish that water or risk is absent.
+- The water adapter may select the first available band if known names are missing, then converts its value as a percentage into years out of 30. Dataset units, band meaning and this conversion require scientific validation. `confidence` values and provider-status labels are implementation outputs, not calibrated confidence or proof of observed data.
 
 ### Optional: preload Curitiba waterways
 
@@ -208,7 +215,7 @@ Available URLs:
 | Endpoint | Method | Description |
 | --- | --- | --- |
 | `/` | `GET` | Basic online status |
-| `/ping` | `GET` | Health check for infrastructure |
+| `/ping` | `GET` | Static health payload; does not perform a database readiness query |
 | `/debug-db` | `GET` | Confirms database connectivity and water-body count |
 | `/geo/distance` | `POST` | Returns the nearest stored water body and the queried point |
 | `/geo/risk` | `POST` | Runs the full risk pipeline and persists the result |
@@ -239,7 +246,7 @@ Example request:
 }
 ```
 
-Example `POST /geo/risk` response:
+Illustrative `POST /geo/risk` response shape (numbers and narrative are examples, not a validated observation):
 
 ```json
 {
@@ -293,7 +300,9 @@ Example `POST /ai/ask-ai` request:
 
 ## Backend notes
 
-- `main.py` creates tables automatically with `Base.metadata.create_all(bind=engine)`.
+- `main.py` creates tables automatically with `Base.metadata.create_all(bind=engine)`; use a deliberately configured development database.
+- `/ping` contains a static database label; only `/debug-db` executes the documented water-body count query. Neither proves a successful end-to-end analysis or provider availability.
+- Browser-visible configuration must never contain the database URI, OpenAI key or Google service-account JSON.
 - Alembic is available in the repository for schema evolution.
 - The Docker image uses `python:3.12-slim` and starts Uvicorn with `python -m uvicorn main:app`.
 - `test_risk_api.py` is a manual smoke-test script for the `/geo/risk` endpoint.
