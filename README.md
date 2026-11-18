@@ -1,9 +1,25 @@
-# OrbTalus / GeoRisk — API original, lote A
+# OrbTalus (GeoRisk) — Backend
 
 API FastAPI para análise de risco de inundação a partir de Polygon GeoJSON.
 Preserva o modelo original (`models.py`), os pesos de `core/risk_calculator.py`
 e o payload original. Configuração, engine, sessões e providers são tardios;
 importar a aplicação não conecta, não executa DDL e não inicializa providers.
+
+## Alcance e limites
+
+Protótipo de pesquisa para triagem preliminar de risco ambiental. As saídas são
+exploratórias: não são previsões validadas nem avaliação completa de imóvel ou
+região. Cobertura de dados, unidades das bandas de água e conversão para anos
+exigem validação científica. Scores e `confidence` não são probabilidades
+calibradas. Nottus continua sendo um adaptador placeholder, sem comprovação de
+observações ambientais; não deve ser apresentado como fonte real.
+
+Esta branch substitui comportamentos antigos documentados na main: configuração
+agora é explícita, não há DDL ao importar, e indisponibilidade de dados/IA deve
+falhar com erro seguro, sem produzir parecer de sucesso com fallback. O modelo
+ponderado continua determinístico; a IA explica a classificação calculada e
+uma declaração de classe divergente é recusada. Isso não garante a veracidade
+de todas as frases do parecer nem ausência de alucinações.
 
 Esta entrega foi validada **offline no Windows/CPython 3.12**. Docker/Linux,
 PostGIS real, providers reais, browser integrado, restore, ARM64 e deploy
