@@ -11,6 +11,17 @@ This is a deployment procedure, not evidence of a completed deployment.
 | Public frontend/API connection and CORS | **UNVERIFIED** |
 | Real provider integration, access, cost and analysis quality | **UNVERIFIED** |
 
+Local Linux evidence on 2026-11-18: derived image
+`sha256:609c1c41e1b3b3b8d455eed8981d9d7a2a72fcf085141d3bfd7af029e7e3fa4b`
+labels runtime source `13a9962adf506162f9978de7c3b767b7027b17b8`. An isolated,
+non-root, read-only container with no network, product database or provider
+credentials matched all 75 installed lock pins and passed `pip check`.
+In-process TestClient checks returned `/ping` 200 and `/ready` 503 as expected
+without `DATABASE_URL`; zero analysis requests were submitted. The disposable
+container was removed after exit. This verifies that installed Linux closure
+and credential-free liveness only. It is not a fresh root-Dockerfile/Render build,
+listening-port test, database readiness check, memory-load test or provider proof.
+
 ## Boundaries and cost
 
 Use a separate, disposable cloud database. The existing local Docker database is
