@@ -2,6 +2,8 @@
 from typing import Literal
 from pathlib import Path
 from numbers import Real
+import re
+import unicodedata
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -27,7 +29,40 @@ class RiskAssessment(BaseModel):
         return clean
 
 
-def get_ai_assessment(question: str) -> RiskAssessment:
+def _classification_text(value):
+    return ''.join(char for char in unicodedata.normalize('NFKD', value.casefold())
+                   if not unicodedata.combining(char))
+
+
+def _calculated_class(value):
+    if not isinstance(value, str):
+        raise ServiceUnavailable('AI_UNAVAILABLE')
+    level = _classification_text(value).strip()
+    if level not in {'baixo', 'medio', 'alto'}:
+        raise ServiceUnavailable('AI_UNAVAILABLE')
+    return level
+
+
+# Recognize direct classification declarations, not arbitrary adjectives such as
+# "alta declividade". This is a bounded contradiction guard, not a semantic proof.
+_CLASSIFICATION_CLAIM = re.compile(
+    r'\b(?:classificacao(?:\s+final)?(?:\s+de\s+risco)?|'
+    r'nivel(?:\s+final)?\s+de\s+risco|risco\s+final)\s*'
+    r'(?:[:=]\s*|(?:e|esta|foi|permanece|como|de)\s+)?'
+    r'(baix[oa]|medi[oa]|alt[oa])\b'
+)
+
+
+def _require_calculated_class(assessment, expected):
+    if assessment.risk_level != expected:
+        raise ServiceUnavailable('AI_UNAVAILABLE')
+    for claim in _CLASSIFICATION_CLAIM.findall(_classification_text(assessment.explanation)):
+        if claim[:-1] + 'o' != expected:
+            raise ServiceUnavailable('AI_UNAVAILABLE')
+
+
+def get_ai_assessment(question: str, *, expected_risk_level=None) -> RiskAssessment:
+    expected = _calculated_class(expected_risk_level) if expected_risk_level is not None else None
     key = get_settings().openai_api_key
     if not key or not key.strip():
         raise ServiceUnavailable("CONFIG_UNAVAILABLE")
@@ -36,12 +71,15 @@ def get_ai_assessment(question: str) -> RiskAssessment:
     from langchain_core.exceptions import OutputParserException
 
     try:
-        return _get_ai_assessment(question, key)
+        result = _get_ai_assessment(question, key, expected_risk_level=expected)
+        if expected is not None:
+            _require_calculated_class(result, expected)
+        return result
     except (OpenAIError, OutputParserException, ValidationError, OSError):
         raise ServiceUnavailable("AI_UNAVAILABLE") from None
 
 
-def _get_ai_assessment(question: str, key: str) -> RiskAssessment:
+def _get_ai_assessment(question: str, key: str, *, expected_risk_level=None) -> RiskAssessment:
     from langchain_openai import OpenAIEmbeddings, ChatOpenAI
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain_core.prompts import PromptTemplate
@@ -101,13 +139,19 @@ def _get_ai_assessment(question: str, key: str) -> RiskAssessment:
             # a parsed answer nor a refusal is returned. Scope to that boundary.
             raise ServiceUnavailable("AI_UNAVAILABLE") from None
 
+    if expected_risk_level is None:
+        task = "Você é um hidrólogo. Use o contexto para decidir um NÍVEL ÚNICO de risco final."
+        level_rule = "- No campo 'risk_level', escolha EXATAMENTE UM entre: 'baixo', 'medio', 'alto'."
+        decision_rule = "- A decisão final deve considerar a distância ao rio, queda relativa e o contexto técnico."
+    else:
+        task = "Você é um hidrólogo. Explique a classificação calculada informada; não reclassifique o risco."
+        level_rule = f"- No campo 'risk_level', use EXATAMENTE '{expected_risk_level}', a classificação já calculada."
+        decision_rule = "- A explicação deve manter essa classificação e os valores fornecidos, sem propor outra classe."
+
     prompt = PromptTemplate(
         input_variables=["context", "question"],
         template=(
-            "Você é um hidrólogo. Use o contexto para decidir um NÍVEL ÚNICO de risco final.\n\n"
-            "Regras:\n"
-            "- No campo 'risk_level', escolha EXATAMENTE UM entre: 'baixo', 'medio', 'alto'.\n"
-            "- A decisão final deve considerar a distância ao rio, queda relativa e o contexto técnico.\n"
+            task + "\n\nRegras:\n" + level_rule + "\n" + decision_rule + "\n"
             "- No campo 'explanation', explique de forma técnica e objetiva (3-6 frases), em PT-BR.\n"
             "- Não inclua nenhum texto fora do JSON.\n\n"
             "Contexto técnico:\n{context}\n\n"

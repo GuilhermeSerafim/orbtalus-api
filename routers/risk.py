@@ -147,7 +147,7 @@ def risk_api(geom: Polygon = Depends(validated_polygon),
         "de forma t\u00e9cnica e objetiva, considerando os pesos aplicados (Topografia 50%, \u00c1gua 30%, Solo 20%)."
     )
 
-    ai = get_ai_assessment(prompt)
+    ai = get_ai_assessment(prompt, expected_risk_level=risk_result['risk_level'])
     if not isinstance(ai.explanation, str):
         raise ServiceUnavailable('AI_UNAVAILABLE')
     ai_explanation = sanitize_text(
