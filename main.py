@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from sqlalchemy import TIMESTAMP, VARCHAR, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
@@ -15,32 +15,7 @@ from routers.risk import router as risk_router
 from routers.ai_vertical import router as ai_router
 
 
-def _matches_readiness_columns(table, columns):
-    expected = set(table.columns.keys())
-    if columns.keys() == expected:
-        return True
-    # The v1 API can keep serving while the atomic hydrography upgrade adds these columns.
-    if table.name != "water_bodies" or "source" in expected:
-        return False
-    additions = {"source": VARCHAR, "source_id": VARCHAR,
-                 "source_updated_at": TIMESTAMP, "fetched_at": TIMESTAMP}
-    if columns.keys() != expected.union(additions):
-        return False
-    for name, required_type in additions.items():
-        column = columns[name]
-        actual_type = column["type"]
-        if column["nullable"] is not True or not isinstance(actual_type, required_type):
-            return False
-        if required_type is VARCHAR and actual_type.length is not None:
-            return False
-        if required_type is TIMESTAMP and (
-            not actual_type.timezone or getattr(actual_type, "precision", None) is not None
-        ):
-            return False
-    return True
-
-
-def create_app():
+def create_app(*, hydrology_only=False):
     app = FastAPI(
         title="GeoRisk API",
         description="Plataforma global e agnóstica para análise de risco hidrológico com foco em resiliência",
@@ -64,9 +39,10 @@ def create_app():
             'code': 'INPUT_INVALID', 'message': MESSAGES['INPUT_INVALID']}})
 
     app.include_router(distance_router, prefix="/geo", tags=["Geoprocessamento"])
-    app.include_router(risk_router, prefix="/geo", tags=["Análise de Risco"])
-    if not demo_mode():
-        app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
+    if not hydrology_only:
+        app.include_router(risk_router, prefix="/geo", tags=["Análise de Risco"])
+        if not demo_mode():
+            app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
 
     @app.get("/ping", tags=["Health"])
     def ping():
@@ -94,18 +70,24 @@ def create_app():
             if same_relation is not True:
                 raise ServiceUnavailable('DATABASE_UNAVAILABLE')
             columns = {column["name"]: column for column in inspector.get_columns(table.name, schema='public')}
-            if not _matches_readiness_columns(table, columns):
+            if set(columns) != set(table.columns.keys()):
                 raise ServiceUnavailable("DATABASE_UNAVAILABLE")
             for expected in table.columns:
                 actual = columns[expected.name]
                 if (actual["nullable"] != expected.nullable
                         or actual["type"]._type_affinity is not expected.type._type_affinity):
                     raise ServiceUnavailable("DATABASE_UNAVAILABLE")
-                if expected.name == "geom" and (
-                    getattr(actual["type"], "srid", None) != 4326
-                    or getattr(actual["type"], "geometry_type", None) != "GEOMETRY"
+                if hasattr(expected.type, "geometry_type") and (
+                    getattr(actual["type"], "srid", None) != expected.type.srid
+                    or getattr(actual["type"], "geometry_type", None) != expected.type.geometry_type
                 ):
                     raise ServiceUnavailable("DATABASE_UNAVAILABLE")
+                if hasattr(expected.type, "timezone") and actual["type"].timezone != expected.type.timezone:
+                    raise ServiceUnavailable("DATABASE_UNAVAILABLE")
+        indexes = inspector.get_indexes("water_bodies", schema="public")
+        if not any(index["unique"] and index["column_names"] == ["source", "source_id"]
+                   and not index.get("dialect_options", {}).get("postgresql_where") for index in indexes):
+            raise ServiceUnavailable("DATABASE_UNAVAILABLE")
         return {"status": "ok", "scope": "local_dependencies",
                 "database": "ok", "postgis": "ok", "schema": "ok",
                 "providers": "not_verified"}
@@ -116,6 +98,10 @@ def create_app():
         return {"status": "Conectado ao PostGIS", "total_rios_cadastrados": count}
 
     return app
+
+
+def create_hydrology_app():
+    return create_app(hydrology_only=True)
 
 
 app = create_app()

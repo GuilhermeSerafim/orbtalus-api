@@ -39,6 +39,7 @@ services/**
 !scripts/
 scripts/**
 !scripts/init_original_db.py
+!scripts/upgrade_hydrography.py
 !data/
 data/**
 !data/bart_flood_model.txt

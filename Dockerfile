@@ -17,7 +17,7 @@ COPY core/demo_quota.py ./core/
 COPY providers/__init__.py providers/base.py providers/mapbiomas_adapter.py ./providers/
 COPY routers/__init__.py routers/ai_vertical.py routers/distance.py routers/risk.py ./routers/
 COPY services/__init__.py services/ai_service.py services/elevation_service.py services/osm_service.py services/text_sanitizer.py ./services/
-COPY scripts/init_original_db.py ./scripts/
+COPY scripts/init_original_db.py scripts/upgrade_hydrography.py ./scripts/
 COPY data/bart_flood_model.txt data/flood_risk_brazil.txt ./data/
 
 USER 10001:10001

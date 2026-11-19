@@ -19,7 +19,6 @@ assert not import_attempts, import_attempts
 
 from fastapi import Depends, HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import TEXT, TIMESTAMP, VARCHAR
 from sqlalchemy.exc import OperationalError
 
 
@@ -39,6 +38,17 @@ class OfflineTestCase(unittest.TestCase):
 
 
 class ConfigurationTests(OfflineTestCase):
+    def test_local_hydrology_app_serves_river_lookup_without_analysis_routes(self):
+        from main import create_hydrology_app
+        local = TestClient(create_hydrology_app())
+        paths = local.get("/openapi.json").json()["paths"]
+        self.assertIn("post", paths["/geo/hydrology"])
+        body = paths["/geo/hydrology"]["post"]["requestBody"]["content"]["application/json"]
+        self.assertIn("example", body, "Swagger should open with a usable hydrology polygon")
+        self.assertNotIn("/geo/risk", paths)
+        self.assertNotIn("/ai/ask-ai", paths)
+        self.assertIn("/geo/risk", create_app().openapi()["paths"])
+
     def test_config_is_read_on_use_and_never_defaults_to_database(self):
         self.assertIsNone(get_settings().database_url)
         with self.assertRaises(ServiceUnavailable) as error:
@@ -88,14 +98,16 @@ class ConfigurationTests(OfflineTestCase):
                 with self.assertRaises(ServiceUnavailable):
                     get_settings()
 
-    def test_ready_checks_database_postgis_and_original_schema_only(self):
+    def test_ready_checks_database_postgis_and_runtime_schema(self):
         import models
         session = MagicMock()
         inspector = MagicMock()
         inspector.get_columns.side_effect = lambda table, schema: [
             {"name": col.name, "type": col.type, "nullable": col.nullable}
             for col in models.Base.metadata.tables[table].columns]
-        session.execute.return_value.scalar_one.side_effect = [1, '3.5.0', 'public', True, True]
+        inspector.get_indexes.return_value = [{
+            'name': 'uq_water_bodies_source_id', 'unique': True, 'column_names': ['source', 'source_id']}]
+        session.execute.return_value.scalar_one.side_effect = [1, '3.5.0', 'public', True, True, True]
         with patch("database.SessionLocal", return_value=session), \
                 patch("main.inspect", return_value=inspector), \
                 patch("routers.risk.get_data_provider", side_effect=forbidden):
@@ -105,12 +117,24 @@ class ConfigurationTests(OfflineTestCase):
         self.assertEqual(response.json()["providers"], "not_verified")
         sql = [str(call.args[0]) for call in session.execute.call_args_list]
         self.assertEqual(sql[:3], ["SELECT 1", "SELECT PostGIS_Version()", "SELECT current_schema()"])
-        self.assertEqual(len(sql), 5)
+        self.assertEqual(len(sql), 6)
         for query in sql[3:]:
             self.assertIn('to_regclass', query)
         self.assertEqual([c.kwargs for c in inspector.get_columns.call_args_list],
-                         [{'schema': 'public'}, {'schema': 'public'}])
+                         [{'schema': 'public'}] * 3)
         session.close.assert_called_once()
+
+    def test_readiness_rejects_missing_hydrology_upsert_index(self):
+        import models
+        session, inspector = MagicMock(), MagicMock()
+        inspector.get_columns.side_effect = lambda table, **kw: [
+            {'name': c.name, 'type': c.type, 'nullable': c.nullable}
+            for c in models.Base.metadata.tables[table].columns]
+        inspector.get_indexes.return_value = []
+        session.execute.return_value.scalar_one.side_effect = [1, '3.5.0', 'public', True, True, True]
+        with patch('database.SessionLocal', return_value=session), patch('main.inspect', return_value=inspector):
+            response = TestClient(create_app()).get('/ready')
+        self.assertEqual(response.status_code, 503, response.text)
 
     def test_readiness_rejects_alternate_or_shadow_schema(self):
         import models
@@ -128,36 +152,6 @@ class ConfigurationTests(OfflineTestCase):
             self.assertEqual(response.json()['detail']['code'], 'DATABASE_UNAVAILABLE')
             session.rollback.assert_called_once()
             session.close.assert_called_once()
-
-    def test_ready_accepts_only_the_complete_additive_water_metadata(self):
-        import models
-        source = {"name": "source", "type": VARCHAR(), "nullable": True}
-        source_id = dict(source, name="source_id")
-        updated = dict(source, name="source_updated_at", type=TIMESTAMP(timezone=True))
-        fetched = dict(updated, name="fetched_at")
-        complete = [source, source_id, updated, fetched]
-        cases = [
-            ("complete", "water_bodies", complete, 200),
-            ("wrong table", "risk_assessments", complete, 503),
-            ("partial", "water_bodies", complete[:-1], 503),
-            ("unexpected extra", "water_bodies", complete + [dict(source, name="other")], 503),
-            ("wrong type", "water_bodies", [dict(source, type=TEXT()), *complete[1:]], 503),
-            ("short varchar", "water_bodies", [dict(source, type=VARCHAR(8)), *complete[1:]], 503),
-            ("naive timestamp", "water_bodies", [*complete[:-1], dict(fetched, type=TIMESTAMP())], 503),
-            ("not nullable", "water_bodies", [*complete[:-1], dict(fetched, nullable=False)], 503),
-        ]
-        for label, target, extras, status in cases:
-            with self.subTest(case=label):
-                session, inspector = MagicMock(), MagicMock()
-                def reflect(table, schema):
-                    originals = [{"name": col.name, "type": col.type, "nullable": col.nullable}
-                                 for col in models.Base.metadata.tables[table].columns]
-                    return originals + extras if table == target else originals
-                inspector.get_columns.side_effect = reflect
-                session.execute.return_value.scalar_one.side_effect = [1, '3.5', 'public', True, True]
-                with patch("database.SessionLocal", return_value=session), patch("main.inspect", return_value=inspector):
-                    response = TestClient(create_app()).get("/ready")
-                self.assertEqual(response.status_code, status, response.text)
 
     def test_readiness_rejects_failed_database_postgis_or_schema(self):
         for mode in ("db", "postgis", "schema"):

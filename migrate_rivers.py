@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from core.db_target import load_contract, validate_target, require_target
 from database import SessionLocal
-from models import WaterBody
+from scripts.init_original_db import OriginalWaterBody
 from services.text_sanitizer import sanitize_text
 
 logger = logging.getLogger(__name__)
@@ -69,9 +69,9 @@ def load_rivers(path):
         name, waterway = props.get('name', 'Sem nome'), props.get('waterway', 'river')
         if any(v is not None and not isinstance(v, str) for v in (name, waterway)):
             raise ValueError('Invalid river name or type')
-        rivers.append(WaterBody(name=sanitize_text(name, field_name='name'),
-                                type=sanitize_text(waterway, field_name='type'),
-                                geom=f'SRID=4326;{geom.wkt}'))
+        rivers.append(OriginalWaterBody(name=sanitize_text(name, field_name='name'),
+                                        type=sanitize_text(waterway, field_name='type'),
+                                        geom=f'SRID=4326;{geom.wkt}'))
     return rivers
 
 

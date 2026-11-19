@@ -1,10 +1,15 @@
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from shapely.geometry import Polygon
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from core.demo_quota import admit_hydrology_request
+from core.errors import ServiceUnavailable
 from core.geometry import get_geo_db, validated_polygon
-from core.validation import within_hydrology_radius
-import models
+from core.validation import HYDROLOGY_RADIUS_KM
+from services.osm_service import OSMService, nearest_water_body
 
 router = APIRouter()
 
@@ -16,20 +21,8 @@ def distance_api(geom: Polygon = Depends(validated_polygon),
     rep = geom.representative_point()
     lon, lat = rep.x, rep.y
 
-    # 2. CONSULTA ESPACIAL: O PostGIS faz o cálculo pesado
-    user_point = f"SRID=4326;POINT({lon} {lat})"
-
-    # Buscamos o rio mais próximo usando ST_DistanceSphere (metros)
-    closest_river = (
-        db.query(
-            models.WaterBody,
-            func.ST_DistanceSphere(models.WaterBody.geom, user_point).label("dist_m"),
-        )
-        .order_by("dist_m")
-        .first()
-    )
-
-    if closest_river is None or not within_hydrology_radius(closest_river[1]):
+    closest_river = nearest_water_body(db, lat, lon, allow_undated=True)
+    if closest_river is None:
         raise HTTPException(status_code=404, detail="Nenhum corpo d'água cadastrado no raio de busca.")
 
     rio, dist_m = closest_river
@@ -40,3 +33,55 @@ def distance_api(geom: Polygon = Depends(validated_polygon),
         "waterway": rio.type,
         "nearest_point": {"lon": lon, "lat": lat},  # Coordenada original da consulta
     }
+
+
+class HydrologyRiver(BaseModel):
+    nome: str | None
+    tipo: str | None
+    distancia_m: float
+    fonte: str
+    id_fonte: str
+    atualizado_na_fonte_em: datetime | None
+
+
+class HydrologyResponse(BaseModel):
+    consulta: Literal["cache", "overpass"]
+    consultado_em: datetime
+    raio_m: int
+    rio: HydrologyRiver | None
+
+
+@router.post(
+    "/hydrology",
+    response_model=HydrologyResponse,
+    dependencies=[Depends(admit_hydrology_request)],
+    summary="Consultar o rio mais próximo sem executar a análise de risco",
+    openapi_extra={"requestBody": {"content": {"application/json": {"example": {
+        "polygon": {"type": "Polygon", "coordinates": [[
+            [-46.6962, -23.5861], [-46.6960, -23.5861], [-46.6960, -23.5859],
+            [-46.6962, -23.5859], [-46.6962, -23.5861],
+        ]]},
+    }}}}},
+    responses={
+        429: {"description": "Limite diário de consultas hidrográficas da demo atingido."},
+        503: {"description": "Cobertura hidrográfica, banco ou serviço da demo indisponível."},
+    },
+)
+def hydrology_api(geom: Polygon = Depends(validated_polygon),
+                  db: Session = Depends(get_geo_db, scope="function"),
+                  osm: OSMService = Depends(OSMService)):
+    """Usa o cache vigente ou consulta o Overpass. Uma busca válida pode retornar rio nulo."""
+    point = geom.representative_point()
+    coverage = osm.ensure_coverage(point.y, point.x)
+    if coverage is None:
+        raise ServiceUnavailable("HYDROLOGY_LOOKUP_FAILED")
+
+    nearest = nearest_water_body(db, point.y, point.x)
+    river = None
+    if nearest is not None:
+        water, meters = nearest
+        river = HydrologyRiver(nome=water.name, tipo=water.type, distancia_m=round(meters, 1),
+                               fonte=water.source, id_fonte=water.source_id,
+                               atualizado_na_fonte_em=water.source_updated_at)
+    return HydrologyResponse(consulta=coverage.origin, consultado_em=coverage.fetched_at,
+                             raio_m=HYDROLOGY_RADIUS_KM * 1000, rio=river)

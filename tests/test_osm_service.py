@@ -1,17 +1,33 @@
 import unittest
+from datetime import datetime, timezone
+import errno
 import io
 import json
 import logging
+import socket
+import ssl
 from email.message import Message
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import urllib.request
 import urllib.response
+from urllib.error import URLError
+from urllib.parse import parse_qs
 
 from offline_guard import offline_boundaries
 
 with offline_boundaries():
     from services.osm_service import OSMService
+
+
+FETCHED_AT = datetime(2026, 11, 19, tzinfo=timezone.utc)
+
+
+def session_with_coverage(fetched_at=None):
+    session = MagicMock()
+    session.query.return_value.scalar.return_value = fetched_at
+    session.scalar.return_value = FETCHED_AT
+    return session
 
 
 class OSMServiceTests(unittest.TestCase):
@@ -21,20 +37,47 @@ class OSMServiceTests(unittest.TestCase):
         self.service = OSMService()
         self.service.api = MagicMock()
 
-    def test_skips_fetch_when_area_is_already_mapped(self):
-        session = MagicMock()
-        session.query.return_value.filter.return_value.count.return_value = 6
-
+    def test_skips_fetch_only_for_a_recent_success_covering_the_request(self):
+        session = session_with_coverage(FETCHED_AT)
         with patch("services.osm_service.SessionLocal", return_value=session):
-            self.service.fetch_and_save_rivers(-23.0, -46.0)
-
+            self.assertEqual(self.service.fetch_and_save_rivers(-23, -46), FETCHED_AT)
         self.service.api.query.assert_not_called()
         session.commit.assert_not_called()
-        session.close.assert_called_once()
+
+    def test_coverage_outcome_reports_the_source_for_each_call(self):
+        cache_time = datetime(2026, 11, 18, tzinfo=timezone.utc)
+        self.service.api.query.return_value = SimpleNamespace(relations=[], ways=[])
+        sessions = [session_with_coverage(cache_time), session_with_coverage()]
+        with patch("services.osm_service.SessionLocal", side_effect=sessions):
+            cached = self.service.ensure_coverage(-23, -46)
+            refreshed = self.service.ensure_coverage(-23, -47)
+        self.assertEqual((cached.origin, cached.fetched_at), ('cache', cache_time))
+        self.assertEqual((refreshed.origin, refreshed.fetched_at), ('overpass', FETCHED_AT))
+        self.service.api.query.assert_called_once()
+
+    def test_coverage_outcome_is_absent_when_refresh_cannot_commit(self):
+        session = session_with_coverage()
+        session.commit.side_effect = RuntimeError('commit failed')
+        self.service.api.query.return_value = SimpleNamespace(relations=[], ways=[])
+        with patch("services.osm_service.SessionLocal", return_value=session):
+            self.assertIsNone(self.service.ensure_coverage(-23, -46))
+        session.rollback.assert_called_once()
+
+    def test_six_existing_waterways_do_not_suppress_refresh_without_coverage(self):
+        session = session_with_coverage()
+        session.query.return_value.filter.return_value.count.return_value = 6
+        self.service.api.query.return_value = SimpleNamespace(relations=[], ways=[])
+        with patch("services.osm_service.SessionLocal", return_value=session):
+            value = self.service.fetch_and_save_rivers(-23, -46)
+        self.service.api.query.assert_called_once()
+        self.assertEqual(value, FETCHED_AT)
+        session.query.return_value.filter.return_value.delete.assert_called_once_with(synchronize_session=False)
+        receipt = session.add.call_args.args[0]
+        self.assertEqual((receipt.radius_m, receipt.fetched_at), (6000, FETCHED_AT))
+        session.commit.assert_called_once()
 
     def test_sanitizes_osm_text_fields_before_commit(self):
-        session = MagicMock()
-        session.query.return_value.filter.return_value.count.return_value = 0
+        session = session_with_coverage()
         self.service.api.query.return_value = SimpleNamespace(
             relations=[],
             ways=[
@@ -52,16 +95,15 @@ class OSMServiceTests(unittest.TestCase):
         with patch("services.osm_service.SessionLocal", return_value=session):
             self.service.fetch_and_save_rivers(-23.0, -46.0)
 
-        rivers = session.add_all.call_args[0][0]
+        rivers = session.execute.call_args.args[1]
         self.assertEqual(len(rivers), 1)
-        self.assertEqual(rivers[0].name, "RioTeste")
-        self.assertEqual(rivers[0].type, "river")
+        self.assertEqual(rivers[0]['name'], "RioTeste")
+        self.assertEqual(rivers[0]['type'], "river")
         session.commit.assert_called_once()
         session.close.assert_called_once()
 
     def test_rolls_back_when_commit_fails(self):
-        session = MagicMock()
-        session.query.return_value.filter.return_value.count.return_value = 0
+        session = session_with_coverage()
         session.commit.side_effect = ValueError(
             "A string literal cannot contain NUL (0x00) characters."
         )
@@ -104,22 +146,21 @@ class OSMServiceTests(unittest.TestCase):
         session.close.assert_called_once()
         self.assertNotIn('PRIVATE_', '\n'.join(captured.output))
 
-    def test_cache_threshold_radius_and_query_are_unchanged(self):
-        session = MagicMock()
-        session.query.return_value.filter.return_value.count.return_value = 5
+    def test_query_adds_reuse_margin_and_requests_way_metadata(self):
+        session = session_with_coverage()
         self.service.api.query.return_value = SimpleNamespace(relations=[], ways=[])
         with patch('services.osm_service.SessionLocal', return_value=session):
             self.service.fetch_and_save_rivers(-23, -46)
         query = self.service.api.query.call_args.args[0]
-        self.assertIn('way["waterway"](around:5000,-23,-46)', query)
-        self.assertIn('relation["waterway"](around:5000,-23,-46)', query)
+        self.assertIn('way["waterway"](around:6000,-23,-46)', query)
+        self.assertIn('relation["waterway"](around:6000,-23,-46)', query)
         self.assertIn('[timeout:25]', query)
-        session.commit.assert_not_called()
+        self.assertIn('out meta;', query)
+        session.commit.assert_called_once()
 
     def test_client_construction_failure_is_best_effort(self):
         service = OSMService()
-        session = MagicMock()
-        session.query.return_value.filter.return_value.count.return_value = 0
+        session = session_with_coverage()
         with patch('services.osm_service.SessionLocal', return_value=session), \
                 patch('services.osm_service.overpy.Overpass', side_effect=RuntimeError('PRIVATE_API')):
             with self.assertLogs('services.osm_service', level='WARNING') as captured:
@@ -129,8 +170,7 @@ class OSMServiceTests(unittest.TestCase):
         session.close.assert_called_once()
 
     def test_relation_names_and_types_still_inherited(self):
-        session = MagicMock()
-        session.query.return_value.filter.return_value.count.return_value = 0
+        session = session_with_coverage()
         self.service.api.query.return_value = SimpleNamespace(
             relations=[SimpleNamespace(id=3, tags={'name': 'Rio relação', 'waterway': 'river'},
                                        members=[SimpleNamespace(_type_value='way', ref=123)])],
@@ -138,8 +178,8 @@ class OSMServiceTests(unittest.TestCase):
                 SimpleNamespace(lon=-46, lat=-23), SimpleNamespace(lon=-45, lat=-22)])])
         with patch('services.osm_service.SessionLocal', return_value=session):
             self.service.fetch_and_save_rivers(-23, -46)
-        river = session.add_all.call_args.args[0][0]
-        self.assertEqual((river.name, river.type), ('Rio relação', 'river'))
+        river = session.execute.call_args.args[1][0]
+        self.assertEqual((river['name'], river['type']), ('Rio relação', 'river'))
 
 
 class OSMTransportTests(unittest.TestCase):
@@ -154,7 +194,7 @@ class OSMTransportTests(unittest.TestCase):
         self.payload = {'elements': [
             {'type': 'node', 'id': 1, 'lat': -23.0, 'lon': -46.0},
             {'type': 'node', 'id': 2, 'lat': -23.1, 'lon': -46.1},
-            {'type': 'way', 'id': 7, 'nodes': [1, 2],
+            {'type': 'way', 'id': 7, 'nodes': [1, 2], 'timestamp': '2025-09-21T15:30:45Z',
              'tags': {'name': 'Rio diagnóstico', 'waterway': 'river'}},
         ]}
         case = self
@@ -174,8 +214,7 @@ class OSMTransportTests(unittest.TestCase):
                 return response
             https_open = http_open
         self.enterContext(patch('urllib.request._opener', urllib.request.build_opener(Wire())))
-        self.session = MagicMock()
-        self.session.query.return_value.filter.return_value.count.return_value = 0
+        self.session = session_with_coverage()
 
     def fetch(self):
         with patch('services.osm_service.SessionLocal', return_value=self.session):
@@ -188,10 +227,18 @@ class OSMTransportTests(unittest.TestCase):
         self.assertIn('OrbTalus', req.get_header('User-agent'))
         self.assertIn('https://github.com/GuilhermeSerafim/orbtalus', req.get_header('User-agent'))
         self.assertEqual(req.get_method(), 'POST')
-        self.assertIn(b'way["waterway"](around:5000,-23,-46)', req.data)
-        self.assertIn(b'relation["waterway"](around:5000,-23,-46)', req.data)
-        rivers = self.session.add_all.call_args.args[0]
-        self.assertEqual((len(rivers), rivers[0].name, rivers[0].type), (1, 'Rio diagnóstico', 'river'))
+        self.assertEqual(req.get_header('Accept'), 'application/json')
+        self.assertEqual(req.get_header('Content-type').split(';')[0], 'application/x-www-form-urlencoded')
+        fields = parse_qs(req.data.decode('ascii'), strict_parsing=True)
+        query, = fields['data']
+        self.assertIn('way["waterway"](around:6000,-23,-46)', query)
+        self.assertIn('relation["waterway"](around:6000,-23,-46)', query)
+        rivers = self.session.execute.call_args.args[1]
+        self.assertEqual((len(rivers), rivers[0]['name'], rivers[0]['type']), (1, 'Rio diagnóstico', 'river'))
+        self.assertEqual(rivers[0]['source'], 'osm')
+        self.assertEqual(rivers[0]['source_id'], 'way/7')
+        self.assertEqual(rivers[0]['source_updated_at'], datetime(2025, 9, 21, 15, 30, 45, tzinfo=timezone.utc))
+        self.assertEqual(rivers[0]['fetched_at'], FETCHED_AT)
         self.session.commit.assert_called_once()
 
     def test_sets_a_finite_transport_timeout_separate_from_ql_timeout(self):
@@ -210,7 +257,7 @@ class OSMTransportTests(unittest.TestCase):
                 with self.assertLogs('services.osm_service', level='WARNING') as logs:
                     self.fetch()
                 self.assertEqual(len(self.requests), 1)
-                self.session.add_all.assert_not_called()
+                self.session.execute.assert_not_called()
                 self.session.commit.assert_not_called()
                 self.session.rollback.assert_called_once()
                 self.session.close.assert_called_once()
@@ -219,7 +266,7 @@ class OSMTransportTests(unittest.TestCase):
     def test_overpass_remark_is_not_accepted_as_empty_success(self):
         self.payload = {'elements': [], 'remark': 'runtime error: Query timed out'}
         self.fetch()
-        self.session.add_all.assert_not_called()
+        self.session.execute.assert_not_called()
         self.session.commit.assert_not_called()
         self.session.rollback.assert_called_once()
 
@@ -255,6 +302,31 @@ class OSMTransportTests(unittest.TestCase):
                 self.assertEqual(event['http_status'], expected)
                 self.assertEqual(event['exception_types'], types)
                 self.assertGreaterEqual(event['overpass_elapsed_ms'], 0)
+                if expected is not None:
+                    self.assertNotIn('transport_category', event)
+                    self.assertNotIn('transport_errno', event)
+
+    def test_open_failure_records_only_category_and_numeric_errno_from_urlerror_reason(self):
+        for reason, category, number in (
+            (socket.gaierror(socket.EAI_AGAIN, 'PRIVATE_DNS'), 'dns', socket.EAI_AGAIN),
+            (ssl.SSLError(ssl.SSL_ERROR_SSL, 'PRIVATE_CERTIFICATE'), 'tls', int(ssl.SSL_ERROR_SSL)),
+            (TimeoutError('PRIVATE_TIMEOUT'), 'timeout', None),
+            (ConnectionRefusedError(errno.ECONNREFUSED, 'PRIVATE_HOST'), 'connection', errno.ECONNREFUSED),
+            (OSError(errno.ENETUNREACH, 'PRIVATE_ROUTE'), 'connection', errno.ENETUNREACH),
+            (OSError(502, 'PRIVATE_NOT_HTTP'), 'unknown', 502),
+            (OSError('PRIVATE_ERRNO', 'PRIVATE_PATH'), 'unknown', None),
+            ('PRIVATE_REASON', 'unknown', None),
+        ):
+            with self.subTest(category=category, number=number):
+                self.requests.clear()
+                self.error = URLError(reason)
+                event = self.diagnostic_events()[0]
+                self.assertEqual(event['stage'], 'overpass_open')
+                self.assertIsNone(event['http_status'])
+                self.assertEqual(event.get('transport_category'), category)
+                self.assertEqual(event['transport_errno'], number)
+                self.assertEqual(len(self.requests), 1)
+                self.session.commit.assert_not_called()
 
     def test_http_200_parser_failure_keeps_successful_transport_status(self):
         self.payload = {'elements': [], 'remark': 'runtime error: PRIVATE_REMARK'}
@@ -272,7 +344,7 @@ class OSMTransportTests(unittest.TestCase):
     def test_cache_and_db_write_failures_keep_their_stage(self):
         for operation, stage, status in (
                 ('query', 'cache_lookup', None),
-                ('add_all', 'db_add_all', 200),
+                ('execute', 'db_upsert', 200),
                 ('commit', 'db_commit', 200)):
             with self.subTest(operation=operation):
                 getattr(self.session, operation).side_effect = ValueError('PRIVATE_DB')
@@ -322,7 +394,7 @@ class OSMTransportTests(unittest.TestCase):
         self.assertEqual(event['stage'], 'db_session')
         self.assertIsNone(event['http_status'])
         self.assertIsNone(event['overpass_elapsed_ms'])
-        self.session.query.return_value.filter.return_value.count.return_value = 6
+        self.session.query.return_value.scalar.return_value = FETCHED_AT
         self.session.close.side_effect = OSError('PRIVATE_CLOSE')
         event = self.diagnostic_events()[0]
         self.assertEqual(event['code'], 'OSM_CACHE_CLOSE_FAILED')
@@ -373,4 +445,39 @@ class OSMTransportTests(unittest.TestCase):
         self.assertEqual((event['code'], event['stage'], event['http_status']),
                          ('OSM_ENRICHMENT_EMPTY', 'hydrology_build', 200))
         self.assertEqual(event['exception_types'], [])
+        self.session.execute.assert_not_called()
+        self.session.add.assert_called_once()
+        self.session.commit.assert_called_once()
+
+    def test_incomplete_json_envelope_never_records_coverage(self):
+        for invalid in ({}, {'elements': None}, {'elements': [{'type':'bogus', 'id':1}]}):
+            with self.subTest(invalid=invalid):
+                self.payload = invalid
+                self.fetch()
+                self.session.add.assert_not_called()
+                self.session.commit.assert_not_called()
+
+    def test_overpy_permissive_defaults_cannot_turn_malformed_relations_into_coverage(self):
+        for fields in ({}, {'members': [{'type': 'bogus', 'ref': 1}]}, {'members': [{'type': 'way'}]}):
+            with self.subTest(fields=fields):
+                self.payload = {'elements': [{'type': 'relation', 'id': 9,
+                    'tags': {'waterway': 'river'}, **fields}]}
+                self.fetch()
+                self.session.commit.assert_not_called()
+
+    def test_malformed_tags_do_not_become_anonymous_streams(self):
+        self.payload['elements'][-1]['tags']['name'] = 42
+        self.fetch()
+        self.session.commit.assert_not_called()
+
+    def test_out_of_scope_way_does_not_become_a_stream(self):
+        self.payload['elements'][-1]['tags'] = {'highway': 'service'}
+        self.fetch()
+        self.session.commit.assert_not_called()
+
+    def test_incomplete_relation_does_not_record_coverage(self):
+        self.payload['elements'].append({'type':'relation', 'id':9, 'tags':{'waterway':'river'},
+            'members':[{'type':'way', 'ref':987, 'role':'main_stream'}]})
+        self.fetch()
+        self.session.add.assert_not_called()
         self.session.commit.assert_not_called()

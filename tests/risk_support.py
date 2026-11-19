@@ -1,5 +1,6 @@
 """Offline HTTP harness: real routes/calculator/models, doubled external boundaries."""
 import os
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
@@ -25,6 +26,9 @@ def db_error():
 def session_double():
     session = MagicMock()
     session.info = {}
+    query = session.query.return_value
+    query.filter.return_value = query
+    query.scalar.return_value = None
     session.query.return_value.order_by.return_value.first.return_value = (
         SimpleNamespace(name='Rio Original', type='river'), 120.123, 'POINT(-46 -23)')
     return session
@@ -38,6 +42,7 @@ class RiskTestCase(unittest.TestCase):
         self.db = session_double()
         self.factory = self.enterContext(patch('database.SessionLocal', return_value=self.db))
         self.osm = self.enterContext(patch('routers.risk.get_osm_service'))
+        self.osm.return_value.fetch_and_save_rivers.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
         self.elevation = self.enterContext(patch('routers.risk.elevation_m', side_effect=[0, 8]))
         self.provider_factory = self.enterContext(patch('routers.risk.get_data_provider'))
         self.provider = self.provider_factory.return_value
