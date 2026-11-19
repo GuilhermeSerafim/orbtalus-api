@@ -1,0 +1,9 @@
+{
+    "source":  "single authorized UI analysis 2026-11-08T19:44:58.313Z",
+    "sourceSha256":  "7fdf41b89426f8955ce6fe8aa1a7c4aa5eba002e52c9ee8f9e55c5abf621ceb5",
+    "observedCalculatedRiskLevel":  "Médio",
+    "observedScore":  0.64,
+    "observedExplanation":  "A classificação de risco é alta devido à proximidade do local com o Córrego Verde I, a apenas 74,2 metros, e a queda relativa de 0,0 metros, indicando que o ponto está praticamente no mesmo nível do rio. A urbanização da área, que resulta em solo impermeável, agrava a situação, pois impede a infiltração da água e aumenta o escoamento superficial. A frequência histórica de alagamentos, mesmo que baixa, não é suficiente para mitigar o risco, dado que a combinação de fatores como a topografia plana e a drenagem deficiente potencializa a vulnerabilidade a inundações. Portanto, a presença simultânea de múltiplos fatores de risco justifica a classificação final como alto.",
+    "upstreamModelRiskLevel":  null,
+    "note":  "Upstream model enum was not captured; tests assign synthetic enum values explicitly."
+}

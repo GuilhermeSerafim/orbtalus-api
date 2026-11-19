@@ -4,8 +4,17 @@ Implements real data fetching from MapBiomas Collections via GEE.
 """
 
 import ee
-from typing import Optional
+import json
 import logging
+import os
+
+from google.auth.exceptions import GoogleAuthError
+from googleapiclient.errors import HttpError
+from requests import RequestException
+
+from core.config import get_settings
+from core.errors import ServiceUnavailable
+from core.validation import finite_number
 
 from .base import DataProvider, SoilData, WaterData
 
@@ -62,18 +71,16 @@ class MapBiomasAdapter(DataProvider):
         if self._initialized:
             return
 
+        project = get_settings().gee_project
+        if not project or not project.strip():
+            raise ServiceUnavailable("CONFIG_UNAVAILABLE")
+
         try:
-            import os
-            from dotenv import load_dotenv
-
-            # Load environment variables
-            load_dotenv()
-
             # Check for service account credentials
             credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
             credentials_json = os.environ.get("GEE_SERVICE_ACCOUNT_JSON")
 
-            if credentials_path and os.path.exists(credentials_path):
+            if credentials_path:
                 # Option 1: Local file path (development)
                 from google.oauth2 import service_account
 
@@ -81,33 +88,31 @@ class MapBiomasAdapter(DataProvider):
                     credentials_path,
                     scopes=["https://www.googleapis.com/auth/earthengine"],
                 )
-                ee.Initialize(credentials=credentials)
-                logger.info(
-                    f"GEE initialized with service account file: {credentials_path}"
-                )
             elif credentials_json:
                 # Option 2: JSON string (Cloud Run / production)
-                import json
                 from google.oauth2 import service_account
 
                 info = json.loads(credentials_json)
+                if not isinstance(info, dict):
+                    raise ServiceUnavailable("CONFIG_UNAVAILABLE")
                 credentials = service_account.Credentials.from_service_account_info(
                     info,
                     scopes=["https://www.googleapis.com/auth/earthengine"],
                 )
-                ee.Initialize(credentials=credentials)
-                logger.info("GEE initialized with inline JSON credentials (Cloud Run)")
             else:
                 # Option 3: Default (ADC or previously authenticated)
-                ee.Initialize()
-                logger.info("GEE initialized with default credentials")
+                credentials = None
+        except (OSError, ValueError, GoogleAuthError):
+            raise ServiceUnavailable("CONFIG_UNAVAILABLE") from None
 
+        try:
+            if credentials is None:
+                ee.Initialize(project=project)
+            else:
+                ee.Initialize(credentials=credentials, project=project)
             self._initialized = True
-
-        except Exception as e:
-            logger.error(f"Failed to initialize Google Earth Engine: {e}")
-            logger.warning("MapBiomasAdapter will return fallback data")
-            self._initialized = False
+        except (ee.EEException, GoogleAuthError, HttpError, RequestException, OSError):
+            raise ServiceUnavailable("DATA_UNAVAILABLE") from None
 
     @property
     def name(self) -> str:
@@ -125,15 +130,7 @@ class MapBiomasAdapter(DataProvider):
             SoilData with classification
         """
         if not self._initialized:
-            # Fallback to safe defaults on GEE failure
-            logger.warning(
-                f"GEE not initialized, using fallback for soil at ({lat}, {lon})"
-            )
-            return {
-                "class_id": 0,
-                "class_name": "Dado Indisponível (GEE não inicializado)",
-                "is_permeable": True,  # Conservative assumption
-            }
+            raise ServiceUnavailable("DATA_UNAVAILABLE")
 
         try:
             # Create point geometry
@@ -158,22 +155,11 @@ class MapBiomasAdapter(DataProvider):
             # Get the class value
             class_value = sample.get("classification_2022").getInfo()
 
-            if class_value is None:
-                logger.warning(f"No MapBiomas data at ({lat}, {lon})")
-                return {
-                    "class_id": 0,
-                    "class_name": "Sem Dados MapBiomas",
-                    "is_permeable": True,
-                }
-
+            finite_number(class_value)
+            if class_value not in MAPBIOMAS_SOIL_CLASSES:
+                raise ServiceUnavailable("DATA_UNAVAILABLE")
             class_id = int(class_value)
-            class_info = MAPBIOMAS_SOIL_CLASSES.get(
-                class_id,
-                {
-                    "name": f"Classe Desconhecida (ID: {class_id})",
-                    "is_permeable": True,  # Conservative default
-                },
-            )
+            class_info = MAPBIOMAS_SOIL_CLASSES[class_id]
 
             return {
                 "class_id": class_id,
@@ -181,13 +167,8 @@ class MapBiomasAdapter(DataProvider):
                 "is_permeable": class_info["is_permeable"],
             }
 
-        except Exception as e:
-            logger.error(f"Error fetching MapBiomas soil data: {e}")
-            return {
-                "class_id": 0,
-                "class_name": f"Erro ao acessar MapBiomas: {str(e)[:50]}",
-                "is_permeable": True,
-            }
+        except (ee.EEException, GoogleAuthError, HttpError, RequestException, OSError):
+            raise ServiceUnavailable("DATA_UNAVAILABLE") from None
 
     # Known band names for MapBiomas Water frequency across versions
     WATER_FREQUENCY_BANDS = [
@@ -200,25 +181,18 @@ class MapBiomasAdapter(DataProvider):
     def _detect_water_band(self, image: "ee.Image") -> str:
         """
         Auto-detect the correct band name from the MapBiomas Water asset.
-        Tries known names, then falls back to first available band.
+        Only known frequency bands have the required scientific meaning.
         """
         available_bands = image.bandNames().getInfo()
-        logger.info(f"MapBiomas Water available bands: {available_bands}")
+        if not isinstance(available_bands, list):
+            raise ServiceUnavailable("DATA_UNAVAILABLE")
 
         for candidate in self.WATER_FREQUENCY_BANDS:
             if candidate in available_bands:
                 logger.info(f"Using water frequency band: '{candidate}'")
                 return candidate
 
-        # Fallback: use the first band if no known name matches
-        if available_bands:
-            fallback = available_bands[0]
-            logger.warning(
-                f"No known band name found, using first available: '{fallback}'"
-            )
-            return fallback
-
-        raise ValueError("MapBiomas Water image has no bands")
+        raise ServiceUnavailable("DATA_UNAVAILABLE")
 
     def get_water_frequency(self, lat: float, lon: float) -> WaterData:
         """
@@ -235,10 +209,7 @@ class MapBiomasAdapter(DataProvider):
             WaterData with frequency (0-30 years)
         """
         if not self._initialized:
-            logger.warning(
-                f"GEE not initialized, using fallback for water at ({lat}, {lon})"
-            )
-            return {"frequency_years": 0, "confidence": 0.0}
+            raise ServiceUnavailable("DATA_UNAVAILABLE")
 
         try:
             logger.info(f"Fetching water frequency for ({lat}, {lon})")
@@ -268,13 +239,11 @@ class MapBiomasAdapter(DataProvider):
             # Get the computed value
             frequency_value = sample.get(band_name).getInfo()
 
-            if frequency_value is None:
-                logger.warning(f"No water frequency data at ({lat}, {lon})")
-                return {"frequency_years": 0, "confidence": 0.5}
-
             # MapBiomas water frequency is 0-100 (percentage of years with water)
             # Convert to years out of 30 — use round() to avoid truncation
-            frequency_pct = float(frequency_value)
+            frequency_pct = finite_number(frequency_value)
+            if not 0 <= frequency_pct <= 100:
+                raise ServiceUnavailable("DATA_UNAVAILABLE")
             frequency_years = round((frequency_pct / 100.0) * 30)
 
             logger.info(
@@ -283,13 +252,10 @@ class MapBiomasAdapter(DataProvider):
             )
             return {"frequency_years": frequency_years, "confidence": 1.0}
 
-        except Exception as e:
-            logger.error(
-                f"Error fetching MapBiomas water frequency: {e}", exc_info=True
-            )
-            return {"frequency_years": 0, "confidence": 0.0}
+        except (ee.EEException, GoogleAuthError, HttpError, RequestException, OSError):
+            raise ServiceUnavailable("DATA_UNAVAILABLE") from None
 
-    def get_elevation(self, lat: float, lon: float) -> Optional[float]:
+    def get_elevation(self, lat: float, lon: float) -> float:
         """
         Fetch elevation data from SRTM (Shuttle Radar Topography Mission) via GEE.
 
@@ -298,13 +264,10 @@ class MapBiomasAdapter(DataProvider):
             lon: Longitude
 
         Returns:
-            Elevation in meters, or None if unavailable
+            Elevation in meters. Unavailable data raises ServiceUnavailable.
         """
         if not self._initialized:
-            logger.warning(
-                f"GEE not initialized, cannot fetch elevation at ({lat}, {lon})"
-            )
-            return None
+            raise ServiceUnavailable("DATA_UNAVAILABLE")
 
         try:
             point = ee.Geometry.Point([lon, lat])
@@ -321,13 +284,8 @@ class MapBiomasAdapter(DataProvider):
 
             elevation_m = elevation_data.getInfo()
 
-            if elevation_m is None:
-                logger.warning(f"No SRTM elevation data at ({lat}, {lon})")
-                return None
-
             logger.debug(f"SRTM elevation at ({lat}, {lon}): {elevation_m}m")
-            return float(elevation_m)
+            return finite_number(elevation_m)
 
-        except Exception as e:
-            logger.error(f"Error fetching SRTM elevation: {e}")
-            return None
+        except (ee.EEException, GoogleAuthError, HttpError, RequestException, OSError):
+            raise ServiceUnavailable("DATA_UNAVAILABLE") from None

@@ -1,0 +1,6 @@
+# unittest is provided by Python; this Starlette TestClient uses httpx2.
+-r requirements.txt
+httpx==0.28.1
+httpx2==2.16.0
+# Offline guards patch dotenv to forbid implicit configuration file reads.
+python-dotenv==1.2.4

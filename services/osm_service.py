@@ -1,39 +1,116 @@
+import json
 import logging
+from time import monotonic
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import overpy
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import models
+from core.errors import MESSAGES, ServiceUnavailable
 from database import SessionLocal
 from services.text_sanitizer import sanitize_text
 
 logger = logging.getLogger(__name__)
 
 
+def _exception_chain(error):
+    """Types only: never serialize exception messages, args, SQL or response bodies."""
+    types, seen = [], set()
+    while error is not None and id(error) not in seen and len(types) < 8:
+        seen.add(id(error))
+        types.append(type(error).__name__)
+        error = error.__cause__ if error.__cause__ is not None else error.__context__
+    return {'exception_types': types, 'chain_truncated': error is not None}
+
+
+def _diagnostic(code, observation, started, error=None):
+    return dict(code=code, **observation,
+                error_code=(error.code if isinstance(error, ServiceUnavailable)
+                            and error.code in MESSAGES else None),
+                elapsed_ms=round((monotonic() - started) * 1000, 3),
+                **_exception_chain(error))
+
+
+def _log_diagnostic(event):
+    # Message text survives the API's message-only formatter; no reliance on extra.
+    logger.warning('OSM diagnostic %s', json.dumps(event, sort_keys=True))
+
+
+def _http_status(value):
+    return value if type(value) is int and 100 <= value <= 599 else None
+
+
+class _OverpassClient:
+    def __init__(self):
+        self.parser = overpy.Overpass()
+
+    def query(self, query, *, diagnostic=None):
+        observation = diagnostic if diagnostic is not None else {}
+        observation.update(stage='overpass_request', http_status=None, overpass_elapsed_ms=None)
+        started = monotonic()
+        try:
+            request = Request(
+                'https://overpass-api.de/api/interpreter',
+                data=query.encode('utf-8'),
+                headers={'User-Agent': 'OrbTalus-local/0.1 (+https://github.com/GuilhermeSerafim/orbtalus; development hydrology)'},
+            )
+            # QL timeout is server-side; this is a separate socket inactivity limit.
+            # No retry, fallback endpoint or global opener mutation on refusal.
+            observation['stage'] = 'overpass_open'
+            with urlopen(request, timeout=45) as response:
+                observation.update(stage='overpass_content_type', http_status=_http_status(response.getcode()))
+                if response.headers.get_content_type() != 'application/json':
+                    raise overpy.exception.OverpassUnknownContentType(response.headers.get('Content-Type'))
+                observation['stage'] = 'overpass_read'
+                body = response.read()
+                observation['stage'] = 'overpass_parse'
+                result = self.parser.parse_json(body)
+                observation['stage'] = 'overpass_close'
+                return result
+        except HTTPError as error:
+            observation['http_status'] = _http_status(error.code)
+            raise
+        finally:
+            observation['overpass_elapsed_ms'] = round((monotonic() - started) * 1000, 3)
+
+
 class OSMService:
     def __init__(self):
-        self.api = overpy.Overpass()
+        self.api = None
 
     def fetch_and_save_rivers(self, lat: float, lon: float, radius_km: int = 5):
-        db = SessionLocal()
+        db = None
+        # Call-local, also when the same service/client is reused or interleaved.
+        started = monotonic()
+        observation = dict(stage='db_session', http_status=None, overpass_elapsed_ms=None)
+        primary = None
         try:
-            self._fetch_and_save_rivers(db, lat, lon, radius_km)
-        except Exception as e:
-            db.rollback()
-            logger.error(
-                "Error fetching OSM data near (%s, %s): %s",
-                lat,
-                lon,
-                e,
-                exc_info=True,
-            )
-            print(f"Erro ao buscar dados do OSM: {e}")
+            db = SessionLocal()
+            self._fetch_and_save_rivers(db, lat, lon, radius_km, observation, started)
+        except Exception as error:
+            primary = _diagnostic('OSM_ENRICHMENT_FAILED', observation, started, error)
+            _log_diagnostic(primary)
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception as cleanup_error:
+                    event = _diagnostic('OSM_CACHE_ROLLBACK_FAILED',
+                                        dict(observation, stage='db_rollback'), started, cleanup_error)
+                    _log_diagnostic(dict(event, primary=primary))
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception as cleanup_error:
+                    event = _diagnostic('OSM_CACHE_CLOSE_FAILED',
+                                        dict(observation, stage='db_close'), started, cleanup_error)
+                    _log_diagnostic(dict(event, primary=primary))
 
     def _fetch_and_save_rivers(
-        self, db: Session, lat: float, lon: float, radius_km: int = 5
+        self, db: Session, lat: float, lon: float, radius_km: int, observation, started
     ):
         """
         Fetch waterways from OpenStreetMap and save to PostGIS.
@@ -43,6 +120,7 @@ class OSMService:
         tag on the relation, not on individual way segments).
         """
         # 1. Cache check: skip if area is already well-mapped.
+        observation['stage'] = 'cache_lookup'
         user_point = f"SRID=4326;POINT({lon} {lat})"
         existing_count = (
             db.query(models.WaterBody)
@@ -57,6 +135,7 @@ class OSMService:
             return
 
         # 2. Query Overpass: ways + relations with full resolution.
+        observation['stage'] = 'query_build'
         query = f"""
         [out:json][timeout:25];
         (
@@ -67,9 +146,14 @@ class OSMService:
         >;
         out skel qt;
         """
-        result = self.api.query(query)
+        if self.api is None:
+            observation['stage'] = 'client_init'
+            self.api = _OverpassClient()
+        observation['stage'] = 'overpass_query'
+        result = self.api.query(query, diagnostic=observation)
 
         # 3. Build relation name/type lookup for member ways.
+        observation['stage'] = 'hydrology_build'
         way_relation_info = {}
         for rel in result.relations:
             rel_name = sanitize_text(
@@ -140,11 +224,14 @@ class OSMService:
             new_rivers.append(river)
 
         if not new_rivers:
-            logger.warning("No waterways found near (%s, %s)", lat, lon)
+            _log_diagnostic(_diagnostic('OSM_ENRICHMENT_EMPTY', observation, started))
             return
 
+        observation['stage'] = 'db_add_all'
         db.add_all(new_rivers)
+        observation['stage'] = 'db_commit'
         db.commit()
+        observation['stage'] = 'post_commit_log'
         logger.info(
             "OSM: %s water bodies saved (%s from relations)",
             len(new_rivers),
