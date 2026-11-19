@@ -10,7 +10,7 @@ from core import RiskCalculator
 from core.demo_quota import admit_demo_request
 from core.errors import ServiceUnavailable
 from core.geometry import get_geo_db, validated_polygon, river_coordinates
-from core.validation import finite_number, nonnegative_distance
+from core.validation import finite_number, within_hydrology_radius
 from providers import MapBiomasAdapter
 from providers.mapbiomas_adapter import MAPBIOMAS_SOIL_CLASSES
 from services.ai_service import get_ai_assessment
@@ -53,11 +53,10 @@ def risk_api(geom: Polygon = Depends(validated_polygon),
         .first()
     )
 
-    if not result:
-        raise ServiceUnavailable('DATA_UNAVAILABLE')
+    if result is None or not within_hydrology_radius(result[1]):
+        raise ServiceUnavailable('HYDROLOGY_UNAVAILABLE')
 
     rio, dist_m, rio_ponto_wkt = result
-    dist_m = nonnegative_distance(dist_m)
     rio_nome = (
         sanitize_text(
             rio.name,
