@@ -13,6 +13,7 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: -r requirements.loc
 
 COPY main.py database.py models.py migrate_rivers.py ./
 COPY core/__init__.py core/config.py core/db_target.py core/errors.py core/geometry.py core/risk_calculator.py core/validation.py ./core/
+COPY core/demo_quota.py ./core/
 COPY providers/__init__.py providers/base.py providers/mapbiomas_adapter.py ./providers/
 COPY routers/__init__.py routers/ai_vertical.py routers/distance.py routers/risk.py ./routers/
 COPY services/__init__.py services/ai_service.py services/elevation_service.py services/osm_service.py services/text_sanitizer.py ./services/

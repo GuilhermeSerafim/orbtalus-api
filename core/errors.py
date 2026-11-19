@@ -1,5 +1,6 @@
 """Public errors use a fixed allowlist; never expose upstream exception text."""
 MESSAGES = {
+    "DEMO_UNAVAILABLE": "Demo temporariamente indisponivel. Tente novamente mais tarde.",
     "INPUT_INVALID": "Área de análise inválida. Revise a seleção.",
     "CONFIG_UNAVAILABLE": "Serviço de análise indisponível. Tente novamente mais tarde.",
     "DATA_UNAVAILABLE": "Dados necessários à análise estão indisponíveis. Tente novamente mais tarde.",

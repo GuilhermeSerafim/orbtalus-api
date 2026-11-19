@@ -13,6 +13,7 @@ core/**
 !core/__init__.py
 !core/config.py
 !core/db_target.py
+!core/demo_quota.py
 !core/errors.py
 !core/geometry.py
 !core/risk_calculator.py

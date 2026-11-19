@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 import models
 from core import RiskCalculator
+from core.demo_quota import admit_demo_request
 from core.errors import ServiceUnavailable
 from core.geometry import get_geo_db, validated_polygon, river_coordinates
 from core.validation import finite_number, nonnegative_distance
@@ -28,7 +29,7 @@ def get_osm_service():
     return OSMService()
 
 
-@router.post("/risk")
+@router.post("/risk", dependencies=[Depends(admit_demo_request)])
 def risk_api(geom: Polygon = Depends(validated_polygon),
              db: Session = Depends(get_geo_db, scope="function")):
     # 1. Initial geospatial processing

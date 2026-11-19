@@ -6,6 +6,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
+from core.demo_quota import demo_mode
 from core.errors import MESSAGES, ServiceUnavailable
 from database import get_db
 import models
@@ -39,7 +40,8 @@ def create_app():
 
     app.include_router(distance_router, prefix="/geo", tags=["Geoprocessamento"])
     app.include_router(risk_router, prefix="/geo", tags=["Análise de Risco"])
-    app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
+    if not demo_mode():
+        app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
 
     @app.get("/ping", tags=["Health"])
     def ping():
@@ -52,6 +54,8 @@ def create_app():
     @app.get("/ready", tags=["Health"])
     def ready(db: Session = Depends(get_db, scope="function")):
         db.execute(text("SELECT 1")).scalar_one()
+        if demo_mode():
+            db.execute(text("SELECT 1 FROM orbtalus_demo.daily_usage LIMIT 1"))
         if not db.execute(text("SELECT PostGIS_Version()")).scalar_one():
             raise ServiceUnavailable("DATABASE_UNAVAILABLE")
         if db.execute(text('SELECT current_schema()')).scalar_one() != 'public':

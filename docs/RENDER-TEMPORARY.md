@@ -86,6 +86,22 @@ are exhausted. Stop if a required resource cannot be created for free.
 
 ## Runtime environment names
 
+### Public demo quota
+
+Apply `scripts/render_demo_quota.sql` as the owner of the isolated Render
+database before deploying the quota-enabled build. The separate schema keeps
+the original public-schema manifest intact. Render mode uses a shared PostgreSQL
+counter for 3 valid admissions per IPv4 address or IPv6 /64 and 20 total per UTC
+day. Set `DEMO_LIMIT_PER_IP` and `DEMO_LIMIT_GLOBAL` to override these defaults.
+Excess requests return HTTP 429 with `Retry-After` before reaching providers.
+Admitted requests count even if downstream processing fails.
+
+The demo uses Render's edge-provided `CF-Connecting-IP`. Missing or invalid edge
+identity and unavailable counters fail closed. `/ai/ask-ai` is absent in Render
+mode. Set `DEMO_PROVIDERS_ENABLED=1` only after the quota is verified. Without
+that setting, a valid request can exercise the counter and returns a controlled
+503 without provider calls. The quota bounds admitted requests, not the invoice.
+
 | Name | Use |
 | --- | --- |
 | `PORT` | Supplied by Render; existing Docker command honors it. |
