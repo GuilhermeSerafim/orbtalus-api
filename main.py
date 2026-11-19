@@ -76,11 +76,17 @@ def create_app():
                 if (actual["nullable"] != expected.nullable
                         or actual["type"]._type_affinity is not expected.type._type_affinity):
                     raise ServiceUnavailable("DATABASE_UNAVAILABLE")
-                if expected.name == "geom" and (
-                    getattr(actual["type"], "srid", None) != 4326
-                    or getattr(actual["type"], "geometry_type", None) != "GEOMETRY"
+                if hasattr(expected.type, "geometry_type") and (
+                    getattr(actual["type"], "srid", None) != expected.type.srid
+                    or getattr(actual["type"], "geometry_type", None) != expected.type.geometry_type
                 ):
                     raise ServiceUnavailable("DATABASE_UNAVAILABLE")
+                if hasattr(expected.type, "timezone") and actual["type"].timezone != expected.type.timezone:
+                    raise ServiceUnavailable("DATABASE_UNAVAILABLE")
+        indexes = inspector.get_indexes("water_bodies", schema="public")
+        if not any(index["unique"] and index["column_names"] == ["source", "source_id"]
+                   and not index.get("dialect_options", {}).get("postgresql_where") for index in indexes):
+            raise ServiceUnavailable("DATABASE_UNAVAILABLE")
         return {"status": "ok", "scope": "local_dependencies",
                 "database": "ok", "postgis": "ok", "schema": "ok",
                 "providers": "not_verified"}

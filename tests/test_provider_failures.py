@@ -169,6 +169,7 @@ class ProviderTests(unittest.TestCase):
     def test_risk_does_not_swallow_provider_error_or_calculate_persisted_success(self):
         app = create_app()
         db = MagicMock()
+        db.query.return_value.filter.return_value = db.query.return_value
         db.query.return_value.order_by.return_value.first.return_value = (
             SimpleNamespace(name='Rio', type='river'), 120.0, 'POINT(-46.0 -23.0)')
         polygon = {'type': 'Polygon', 'coordinates': [[[-46, -23], [-46, -22.9],

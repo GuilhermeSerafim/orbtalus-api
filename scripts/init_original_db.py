@@ -12,10 +12,21 @@ if __package__ in {None, ''}:
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import DeclarativeBase
 
 from core.db_target import load_contract, validate_target, inspect_target, validate_identity
-from database import Base
-import models  # Register only original metadata; no side effects.
+import models
+
+
+class Base(DeclarativeBase):
+    """Frozen v1 bootstrap metadata, independent of later runtime tables."""
+
+
+class OriginalWaterBody(models.OriginalWaterColumns, Base):
+    __tablename__ = 'water_bodies'
+
+
+models.RiskAssessment.__table__.to_metadata(Base.metadata)
 
 
 def _type_name(column_type):
@@ -31,9 +42,9 @@ def _default(value):
                   r"nextval('\1'::regclass)", str(value))
 
 
-def expected_manifest():
+def expected_manifest(metadata=Base.metadata, format_name='orbtalus-original-v1'):
     tables, sequences = {}, []
-    for table in sorted(Base.metadata.tables.values(), key=lambda t: t.name):
+    for table in sorted(metadata.tables.values(), key=lambda t: t.name):
         columns = []
         for column in table.columns:
             default = str(column.server_default.arg) if column.server_default is not None else None
@@ -53,7 +64,7 @@ def expected_manifest():
                              'primary_key': {'name': f'{table.name}_pkey', 'columns': ['id']},
                              'indexes': sorted(indexes, key=lambda i: i['name']),
                              'foreign_keys': [], 'checks': [], 'unique_constraints': []}
-    return {'format': 'orbtalus-original-v1', 'schema': 'public', 'tables': tables,
+    return {'format': format_name, 'schema': 'public', 'tables': tables,
             'sequences': sorted(sequences, key=lambda s: s['name']),
             'python_defaults': {'risk_assessments.created_at': 'datetime.utcnow'}}
 
@@ -95,10 +106,11 @@ def _check_objects(objects, expected):
         raise ValueError('Unexpected object in public schema')
 
 
-def read_manifest(connection):
+def read_manifest(connection, expected=None):
     """Reflect the live schema, including server defaults and owned serial sequences."""
     inspector = inspect(connection)
-    expected = expected_manifest()
+    if expected is None:
+        expected = expected_manifest()
     tables = {}
     for name in expected['tables']:
         reflected_columns = inspector.get_columns(name, schema='public')
@@ -137,10 +149,10 @@ def read_manifest(connection):
           AND d.refclassid='pg_class'::regclass AND d.deptype='a'
         LEFT JOIN pg_class t ON t.oid=d.refobjid
         LEFT JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=d.refobjsubid
-        WHERE n.nspname='public' AND s.relname IN ('water_bodies_id_seq','risk_assessments_id_seq')
+        WHERE n.nspname='public' AND s.relname = ANY(:sequence_names)
         ORDER BY s.relname
-    ''')).mappings()]
-    return {'format': 'orbtalus-original-v1', 'schema': 'public', 'tables': tables,
+    '''), {'sequence_names': [seq['name'] for seq in expected['sequences']]}).mappings()]
+    return {'format': expected['format'], 'schema': 'public', 'tables': tables,
             'sequences': sequences, 'python_defaults': expected['python_defaults']}
 
 

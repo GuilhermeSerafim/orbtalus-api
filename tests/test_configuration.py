@@ -87,14 +87,16 @@ class ConfigurationTests(OfflineTestCase):
                 with self.assertRaises(ServiceUnavailable):
                     get_settings()
 
-    def test_ready_checks_database_postgis_and_original_schema_only(self):
+    def test_ready_checks_database_postgis_and_runtime_schema(self):
         import models
         session = MagicMock()
         inspector = MagicMock()
         inspector.get_columns.side_effect = lambda table, schema: [
             {"name": col.name, "type": col.type, "nullable": col.nullable}
             for col in models.Base.metadata.tables[table].columns]
-        session.execute.return_value.scalar_one.side_effect = [1, '3.5.0', 'public', True, True]
+        inspector.get_indexes.return_value = [{
+            'name': 'uq_water_bodies_source_id', 'unique': True, 'column_names': ['source', 'source_id']}]
+        session.execute.return_value.scalar_one.side_effect = [1, '3.5.0', 'public', True, True, True]
         with patch("database.SessionLocal", return_value=session), \
                 patch("main.inspect", return_value=inspector), \
                 patch("routers.risk.get_data_provider", side_effect=forbidden):
@@ -104,12 +106,24 @@ class ConfigurationTests(OfflineTestCase):
         self.assertEqual(response.json()["providers"], "not_verified")
         sql = [str(call.args[0]) for call in session.execute.call_args_list]
         self.assertEqual(sql[:3], ["SELECT 1", "SELECT PostGIS_Version()", "SELECT current_schema()"])
-        self.assertEqual(len(sql), 5)
+        self.assertEqual(len(sql), 6)
         for query in sql[3:]:
             self.assertIn('to_regclass', query)
         self.assertEqual([c.kwargs for c in inspector.get_columns.call_args_list],
-                         [{'schema': 'public'}, {'schema': 'public'}])
+                         [{'schema': 'public'}] * 3)
         session.close.assert_called_once()
+
+    def test_readiness_rejects_missing_hydrology_upsert_index(self):
+        import models
+        session, inspector = MagicMock(), MagicMock()
+        inspector.get_columns.side_effect = lambda table, **kw: [
+            {'name': c.name, 'type': c.type, 'nullable': c.nullable}
+            for c in models.Base.metadata.tables[table].columns]
+        inspector.get_indexes.return_value = []
+        session.execute.return_value.scalar_one.side_effect = [1, '3.5.0', 'public', True, True, True]
+        with patch('database.SessionLocal', return_value=session), patch('main.inspect', return_value=inspector):
+            response = TestClient(create_app()).get('/ready')
+        self.assertEqual(response.status_code, 503, response.text)
 
     def test_readiness_rejects_alternate_or_shadow_schema(self):
         import models

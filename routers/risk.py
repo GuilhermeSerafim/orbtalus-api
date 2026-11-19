@@ -15,7 +15,7 @@ from providers import MapBiomasAdapter
 from providers.mapbiomas_adapter import MAPBIOMAS_SOIL_CLASSES
 from services.ai_service import get_ai_assessment
 from services.elevation_service import elevation_m
-from services.osm_service import OSMService
+from services.osm_service import OSMService, eligible_water_body
 from services.text_sanitizer import sanitize_text
 
 router = APIRouter()
@@ -36,8 +36,8 @@ def risk_api(geom: Polygon = Depends(validated_polygon),
     rep = geom.representative_point()
     lon, lat = rep.x, rep.y
 
-    # OSM enrichment is best effort and uses its own transaction.
-    get_osm_service().fetch_and_save_rivers(lat, lon)
+    if get_osm_service().fetch_and_save_rivers(lat, lon) is None:
+        raise ServiceUnavailable('HYDROLOGY_UNAVAILABLE')
 
     # 2. Query PostGIS for nearest water body and closest contact point.
     user_point = f"SRID=4326;POINT({lon} {lat})"
@@ -49,6 +49,7 @@ def risk_api(geom: Polygon = Depends(validated_polygon),
                 func.ST_ClosestPoint(models.WaterBody.geom, user_point)
             ).label("rio_ponto_wkt"),
         )
+        .filter(eligible_water_body(lat, lon))
         .order_by("dist_m")
         .first()
     )

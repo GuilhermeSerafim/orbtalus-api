@@ -11,7 +11,7 @@ def load_contract(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
-def validate_target(contract, raw_url):
+def validate_target(contract, raw_url, *, purpose='disposable-original-baseline'):
     """Validate before engine construction; never interpolate target values into SQL."""
     # These libpq defaults can redirect an otherwise exact host/port URL.
     # Inspect presence only; never read service files or include values in errors.
@@ -20,7 +20,7 @@ def validate_target(contract, raw_url):
     required = {'host', 'port', 'database', 'schema', 'purpose'}
     if (not isinstance(contract, dict) or set(contract) != required
             or contract.get('schema') != 'public'
-            or contract.get('purpose') != 'disposable-original-baseline'
+            or contract.get('purpose') != purpose
             or type(contract.get('port')) is not int or not 1 <= contract['port'] <= 65535
             or any(not isinstance(contract.get(k), str) or not contract[k].strip()
                    for k in ('host', 'database'))):

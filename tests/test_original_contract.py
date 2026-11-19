@@ -42,7 +42,6 @@ class OriginalContractTests(RiskTestCase):
                     soil_class_id=3, is_permeable=True))
                 self.db.commit.assert_called_once()
                 self.db.refresh.assert_not_called()
-                self.db.query.return_value.filter.assert_not_called()
                 self.db.close.assert_called_once()
 
     def test_zero_elevations_are_valid(self):
@@ -138,7 +137,6 @@ class OriginalContractTests(RiskTestCase):
         self.assertEqual(response.json(), {'distancia_rio_m': 120.1,
             'rio_mais_proximo': 'Rio Original', 'waterway': 'river',
             'nearest_point': {'lon': -46.1, 'lat': -23.1}})
-        self.db.query.return_value.filter.assert_not_called()
         self.assert_no_analysis()
 
     def test_polygon_with_hole_and_feature_distance_are_accepted(self):

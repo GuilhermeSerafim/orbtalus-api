@@ -1,11 +1,14 @@
 import json
 import logging
+from datetime import timedelta, timezone
+from decimal import Decimal
 from time import monotonic
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import overpy
-from sqlalchemy import func
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 import models
@@ -15,6 +18,30 @@ from database import SessionLocal
 from services.text_sanitizer import sanitize_text
 
 logger = logging.getLogger(__name__)
+
+OSM_SOURCE = 'osm'
+COVERAGE_TTL = timedelta(days=30)
+FETCH_MARGIN_M = 1000
+
+
+def covering_fetch_time(lat, lon, radius_m):
+    """SQL expression for the newest complete fetch covering the requested disk."""
+    receipt = models.HydrographyFetch
+    point = f"SRID=4326;POINT({lon} {lat})"
+    return select(func.max(receipt.fetched_at)).where(
+        receipt.fetched_at >= func.now() - COVERAGE_TTL,
+        func.ST_DistanceSphere(receipt.center, point) + radius_m <= receipt.radius_m,
+    ).scalar_subquery()
+
+
+def eligible_water_body(lat, lon, *, allow_undated=False):
+    # Read the receipt and the water geometry in the same database snapshot.
+    cutoff = covering_fetch_time(lat, lon, HYDROLOGY_RADIUS_KM * 1000)
+    water = models.WaterBody
+    observed = (water.source == OSM_SOURCE) & (water.fetched_at >= cutoff)
+    if allow_undated:
+        return observed | (water.source.is_(None) & cutoff.is_(None))
+    return observed
 
 
 def _exception_chain(error):
@@ -44,6 +71,23 @@ def _http_status(value):
     return value if type(value) is int and 100 <= value <= 599 else None
 
 
+def _validate_elements(elements):
+    """Overpy silently defaults missing elements/members and ignores unknown types."""
+    if not isinstance(elements, list):
+        raise ValueError('Incomplete Overpass response')
+    for element in elements:
+        kind = element.get('type')
+        if kind not in ('node', 'way', 'relation') or type(element.get('id')) is not int:
+            raise ValueError('Unexpected Overpass element')
+        if kind == 'relation':
+            members = element.get('members')
+            if not isinstance(members, list) or any(
+                member.get('type') not in ('node', 'way', 'relation')
+                or type(member.get('ref')) is not int for member in members
+            ):
+                raise ValueError('Incomplete Overpass relation')
+
+
 class _OverpassClient:
     def __init__(self):
         self.parser = overpy.Overpass()
@@ -68,7 +112,12 @@ class _OverpassClient:
                 observation['stage'] = 'overpass_read'
                 body = response.read()
                 observation['stage'] = 'overpass_parse'
-                result = self.parser.parse_json(body)
+                payload = json.loads(body, parse_float=Decimal)
+                if 'remark' in payload:
+                    # Preserve Overpy's typed timeout/refusal diagnostics.
+                    return self.parser.parse_json(body)
+                _validate_elements(payload.get('elements'))
+                result = overpy.Result.from_json(payload, api=self.parser)
                 observation['stage'] = 'overpass_close'
                 return result
         except HTTPError as error:
@@ -90,7 +139,7 @@ class OSMService:
         primary = None
         try:
             db = SessionLocal()
-            self._fetch_and_save_rivers(db, lat, lon, radius_km, observation, started)
+            return self._fetch_and_save_rivers(db, lat, lon, radius_km, observation, started)
         except Exception as error:
             primary = _diagnostic('OSM_ENRICHMENT_FAILED', observation, started, error)
             _log_diagnostic(primary)
@@ -120,32 +169,22 @@ class OSMService:
         Tiete/Pinheiros are modeled as relations in OSM, with the name
         tag on the relation, not on individual way segments).
         """
-        # 1. Cache check: skip if area is already well-mapped.
         observation['stage'] = 'cache_lookup'
-        user_point = f"SRID=4326;POINT({lon} {lat})"
-        existing_count = (
-            db.query(models.WaterBody)
-            .filter(
-                func.ST_DistanceSphere(models.WaterBody.geom, user_point)
-                < (radius_km * 1000)
-            )
-            .count()
-        )
+        radius_m = radius_km * 1000
+        covered_at = db.query(covering_fetch_time(lat, lon, radius_m)).scalar()
+        if covered_at is not None:
+            return covered_at
 
-        if existing_count > 5:
-            return
-
-        # 2. Query Overpass: ways + relations with full resolution.
+        fetched_at = db.scalar(select(func.clock_timestamp()))
+        fetch_radius = radius_m + FETCH_MARGIN_M
         observation['stage'] = 'query_build'
         query = f"""
         [out:json][timeout:25];
-        (
-          way["waterway"](around:{radius_km * 1000},{lat},{lon});
-          relation["waterway"](around:{radius_km * 1000},{lat},{lon});
-        );
-        out body;
-        >;
-        out skel qt;
+        relation["waterway"](around:{fetch_radius},{lat},{lon})->.rivers;
+        .rivers out body;
+        (way["waterway"](around:{fetch_radius},{lat},{lon}); way(r.rivers);)->.ways;
+        .ways out meta;
+        node(w.ways); out skel qt;
         """
         if self.api is None:
             observation['stage'] = 'client_init'
@@ -164,7 +203,7 @@ class OSMService:
                 context=f"osm_relation[{rel.id}]",
             )
             rel_type = sanitize_text(
-                rel.tags.get("waterway", "river"),
+                rel.tags.get("waterway"),
                 field_name="type",
                 logger=logger,
                 context=f"osm_relation[{rel.id}]",
@@ -182,13 +221,18 @@ class OSMService:
                         "type": rel_type,
                     }
 
-        # 4. Process all ways with relation name fallback.
-        new_rivers = []
-        for way in result.ways:
-            if len(way.nodes) < 2:
-                continue
+        ways = sorted(result.ways, key=lambda way: way.id)
+        if way_relation_info.keys() - {way.id for way in ways}:
+            raise ValueError('Missing waterway relation members')
 
-            coords = ",".join(f"{node.lon} {node.lat}" for node in way.nodes)
+        rows = []
+        for way in ways:
+            nodes = way.nodes
+            if len(nodes) < 2 or any(
+                not (-180 <= node.lon <= 180 and -90 <= node.lat <= 90) for node in nodes
+            ):
+                raise ValueError('Incomplete waterway geometry')
+            coords = ",".join(f"{node.lon} {node.lat}" for node in nodes)
             wkt = f"LINESTRING({coords})"
 
             name = way.tags.get("name")
@@ -214,31 +258,39 @@ class OSMService:
                 context=f"osm_way[{way.id}]",
             )
 
-            if waterway_type is None:
-                waterway_type = "stream"
+            if not waterway_type:
+                raise ValueError('Way lacks a waterway tag or waterway relation')
 
-            river = models.WaterBody(
-                name=name,
-                type=waterway_type,
-                geom=f"SRID=4326;{wkt}",
+            # Overpy parses OSM's UTC timestamps as naive datetimes.
+            updated_at = getattr(way, 'attributes', {}).get('timestamp')
+            rows.append(dict(
+                name=name, type=waterway_type, geom=f"SRID=4326;{wkt}",
+                source=OSM_SOURCE, source_id=f'way/{way.id}', fetched_at=fetched_at,
+                source_updated_at=updated_at.replace(tzinfo=timezone.utc) if updated_at else None,
+            ))
+
+        if rows:
+            observation['stage'] = 'db_upsert'
+            table = models.WaterBody.__table__
+            stmt = insert(table)
+            changed = ('name', 'type', 'geom', 'source_updated_at', 'fetched_at')
+            upsert = stmt.on_conflict_do_update(
+                index_elements=[table.c.source, table.c.source_id],
+                set_={column: stmt.excluded[column] for column in changed},
+                where=table.c.fetched_at.is_(None) | (table.c.fetched_at < stmt.excluded.fetched_at),
             )
-            new_rivers.append(river)
-
-        if not new_rivers:
+            db.execute(upsert, rows)
+        else:
             _log_diagnostic(_diagnostic('OSM_ENRICHMENT_EMPTY', observation, started))
-            return
 
-        observation['stage'] = 'db_add_all'
-        db.add_all(new_rivers)
+        # Keep only reusable receipts; the delete shares the successful refresh transaction.
+        observation['stage'] = 'db_receipt'
+        db.query(models.HydrographyFetch).filter(
+            models.HydrographyFetch.fetched_at < fetched_at - COVERAGE_TTL
+        ).delete(synchronize_session=False)
+        db.add(models.HydrographyFetch(
+            center=f"SRID=4326;POINT({lon} {lat})", radius_m=fetch_radius, fetched_at=fetched_at,
+        ))
         observation['stage'] = 'db_commit'
         db.commit()
-        observation['stage'] = 'post_commit_log'
-        logger.info(
-            "OSM: %s water bodies saved (%s from relations)",
-            len(new_rivers),
-            len(way_relation_info),
-        )
-        print(
-            f"Sucesso: {len(new_rivers)} corpos d'agua salvos "
-            f"({len(way_relation_info)} via relations com nomes)."
-        )
+        return fetched_at

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from core.geometry import get_geo_db, validated_polygon
 from core.validation import within_hydrology_radius
+from services.osm_service import eligible_water_body
 import models
 
 router = APIRouter()
@@ -25,6 +26,7 @@ def distance_api(geom: Polygon = Depends(validated_polygon),
             models.WaterBody,
             func.ST_DistanceSphere(models.WaterBody.geom, user_point).label("dist_m"),
         )
+        .filter(eligible_water_body(lat, lon, allow_undated=True))
         .order_by("dist_m")
         .first()
     )
