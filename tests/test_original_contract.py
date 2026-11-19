@@ -94,11 +94,41 @@ class OriginalContractTests(RiskTestCase):
         self.db.query.return_value.order_by.return_value.first.return_value = None
         response = self.post_risk()
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()['detail']['code'], 'DATA_UNAVAILABLE')
+        self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_UNAVAILABLE')
         self.assertEqual(self.client.post('/geo/distance', json={'polygon': POLYGON}).status_code, 404)
         self.elevation.assert_not_called()
         self.provider_factory.assert_not_called()
         self.assert_no_analysis()
+
+    def test_distant_river_cannot_supply_local_hydrography(self):
+        first = self.db.query.return_value.order_by.return_value.first
+        river, _, contact = first.return_value
+        for meters in (306476.416, 5000.01):
+            with self.subTest(meters=meters):
+                self.elevation.side_effect = [0, 8]
+                first.return_value = (river, meters, contact)
+                response = self.post_risk()
+                self.assertEqual(response.status_code, 503, response.text)
+                self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_UNAVAILABLE')
+                self.elevation.assert_not_called()
+                self.provider_factory.assert_not_called()
+                self.assert_no_analysis()
+
+    def test_distance_endpoint_rejects_nearest_record_outside_search_radius(self):
+        first = self.db.query.return_value.order_by.return_value.first
+        river, _, _ = first.return_value
+        first.return_value = (river, 5000.01)
+        response = self.client.post('/geo/distance', json={'polygon': POLYGON})
+        self.assertEqual(response.status_code, 404, response.text)
+
+    def test_search_radius_includes_its_boundary(self):
+        first = self.db.query.return_value.order_by.return_value.first
+        river, _, contact = first.return_value
+        first.return_value = (river, 5000, contact)
+        self.assertEqual(self.post_risk().json()['distancia_rio_m'], 5000)
+        first.return_value = (river, 5000)
+        response = self.client.post('/geo/distance', json={'polygon': POLYGON})
+        self.assertEqual(response.json()['distancia_rio_m'], 5000)
 
     def test_distance_uses_original_columns_and_shape(self):
         row = self.db.query.return_value.order_by.return_value.first.return_value

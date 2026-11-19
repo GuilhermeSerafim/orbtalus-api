@@ -84,8 +84,8 @@ quando o recurso é solicitado; não ativa provider alternativo.
 | `GET /` e `GET /ping` | Processo vivo; não declaram banco ou providers conectados. |
 | `GET /ready` | DB/PostGIS/schema público original e ausência de shadowing; `scope=local_dependencies`, `providers=not_verified`. Sem chamadas externas a providers. |
 | `GET /debug-db` | Conectividade e contagem de rios; erro seguro em falha de DB. |
-| `POST /geo/distance` | Rio mais próximo armazenado; 404 quando não existe resultado. |
-| `POST /geo/risk` | Cálculo original, parecer obrigatório e persistência somente em sucesso; sem hidrografia útil retorna 503. |
+| `POST /geo/distance` | Corpo d’água cadastrado mais próximo do ponto representativo do polígono, até 5 km. Retorna 404 quando falta cobertura nesse raio. |
+| `POST /geo/risk` | Aceita hidrografia do PostGIS até 5 km, inclusive após falha do Overpass. Sem registro nesse raio, retorna 503 antes de consultar elevação, MapBiomas ou IA e de gravar uma análise. |
 | `POST /ai/ask-ai` | `{ "pergunta": "..." }` retorna `{ "resposta": { "risk_level": "baixo|medio|alto", "explanation": "..." } }`. |
 
 Risk/distance aceitam `{polygon: Polygon}` ou `{polygon: Feature<Polygon>}`,
@@ -138,6 +138,7 @@ Erros conhecidos usam mensagens fixas, sem eco do input, DSN, token ou traceback
 | 422 | `INPUT_INVALID` | Área de análise inválida. Revise a seleção. |
 | 503 | `CONFIG_UNAVAILABLE` | Serviço de análise indisponível. Tente novamente mais tarde. |
 | 503 | `DATA_UNAVAILABLE` | Dados necessários à análise estão indisponíveis. Tente novamente mais tarde. |
+| 503 | `HYDROLOGY_UNAVAILABLE` | Hidrografia local insuficiente para classificar o risco nesta área. |
 | 503 | `DATABASE_UNAVAILABLE` | Não foi possível concluir a análise. Tente novamente mais tarde. |
 | 503 | `AI_UNAVAILABLE` | Parecer técnico indisponível. Tente novamente mais tarde. |
 

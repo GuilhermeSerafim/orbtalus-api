@@ -3,6 +3,8 @@ import math
 
 from core.errors import ServiceUnavailable
 
+HYDROLOGY_RADIUS_KM = 5
+
 
 def finite_number(value) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -21,3 +23,7 @@ def nonnegative_distance(value):
     if number < 0:
         raise ServiceUnavailable('DATA_UNAVAILABLE')
     return number
+
+
+def within_hydrology_radius(distance_m):
+    return nonnegative_distance(distance_m) <= HYDROLOGY_RADIUS_KM * 1000

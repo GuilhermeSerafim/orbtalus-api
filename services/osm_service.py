@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 import models
 from core.errors import MESSAGES, ServiceUnavailable
+from core.validation import HYDROLOGY_RADIUS_KM
 from database import SessionLocal
 from services.text_sanitizer import sanitize_text
 
@@ -81,7 +82,7 @@ class OSMService:
     def __init__(self):
         self.api = None
 
-    def fetch_and_save_rivers(self, lat: float, lon: float, radius_km: int = 5):
+    def fetch_and_save_rivers(self, lat: float, lon: float, radius_km: int = HYDROLOGY_RADIUS_KM):
         db = None
         # Call-local, also when the same service/client is reused or interleaved.
         started = monotonic()

@@ -3,7 +3,7 @@ from shapely.geometry import Polygon
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from core.geometry import get_geo_db, validated_polygon
-from core.validation import nonnegative_distance
+from core.validation import within_hydrology_radius
 import models
 
 router = APIRouter()
@@ -29,11 +29,10 @@ def distance_api(geom: Polygon = Depends(validated_polygon),
         .first()
     )
 
-    if not closest_river:
-        raise HTTPException(status_code=404, detail="Nenhum rio no banco de dados.")
+    if closest_river is None or not within_hydrology_radius(closest_river[1]):
+        raise HTTPException(status_code=404, detail="Nenhum corpo d'água cadastrado no raio de busca.")
 
     rio, dist_m = closest_river
-    dist_m = nonnegative_distance(dist_m)
 
     return {
         "distancia_rio_m": round(dist_m, 1),
