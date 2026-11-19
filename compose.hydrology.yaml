@@ -1,0 +1,35 @@
+# Standalone local river lookup. Only the HTTP port is published.
+name: orbtalus-hydrology-local
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: orbtalus_hydrology
+      POSTGRES_HOST_AUTH_METHOD: trust
+    # The API shares this namespace. PostgreSQL only accepts loopback connections.
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    ports:
+      - "127.0.0.1:8001:8080"
+    volumes:
+      - rivers:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "orbtalus_hydrology"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  api:
+    build: .
+    network_mode: service:db
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres@127.0.0.1:5432/orbtalus_hydrology
+    command:
+      - sh
+      - -ec
+      - |
+        python -c 'import models; from database import get_engine; models.Base.metadata.create_all(get_engine())'
+        exec python -m uvicorn main:create_hydrology_app --factory --host 0.0.0.0 --port 8080
+volumes:
+  rivers:

@@ -15,7 +15,7 @@ from routers.risk import router as risk_router
 from routers.ai_vertical import router as ai_router
 
 
-def create_app():
+def create_app(*, hydrology_only=False):
     app = FastAPI(
         title="GeoRisk API",
         description="Plataforma global e agnóstica para análise de risco hidrológico com foco em resiliência",
@@ -39,9 +39,10 @@ def create_app():
             'code': 'INPUT_INVALID', 'message': MESSAGES['INPUT_INVALID']}})
 
     app.include_router(distance_router, prefix="/geo", tags=["Geoprocessamento"])
-    app.include_router(risk_router, prefix="/geo", tags=["Análise de Risco"])
-    if not demo_mode():
-        app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
+    if not hydrology_only:
+        app.include_router(risk_router, prefix="/geo", tags=["Análise de Risco"])
+        if not demo_mode():
+            app.include_router(ai_router, prefix="/ai", tags=["Inteligência Artificial"])
 
     @app.get("/ping", tags=["Health"])
     def ping():
@@ -97,6 +98,10 @@ def create_app():
         return {"status": "Conectado ao PostGIS", "total_rios_cadastrados": count}
 
     return app
+
+
+def create_hydrology_app():
+    return create_app(hydrology_only=True)
 
 
 app = create_app()

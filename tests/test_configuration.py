@@ -38,6 +38,17 @@ class OfflineTestCase(unittest.TestCase):
 
 
 class ConfigurationTests(OfflineTestCase):
+    def test_local_hydrology_app_serves_river_lookup_without_analysis_routes(self):
+        from main import create_hydrology_app
+        local = TestClient(create_hydrology_app())
+        paths = local.get("/openapi.json").json()["paths"]
+        self.assertIn("post", paths["/geo/hydrology"])
+        body = paths["/geo/hydrology"]["post"]["requestBody"]["content"]["application/json"]
+        self.assertIn("example", body, "Swagger should open with a usable hydrology polygon")
+        self.assertNotIn("/geo/risk", paths)
+        self.assertNotIn("/ai/ask-ai", paths)
+        self.assertIn("/geo/risk", create_app().openapi()["paths"])
+
     def test_config_is_read_on_use_and_never_defaults_to_database(self):
         self.assertIsNone(get_settings().database_url)
         with self.assertRaises(ServiceUnavailable) as error:

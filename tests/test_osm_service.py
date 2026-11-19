@@ -1,13 +1,18 @@
 import unittest
 from datetime import datetime, timezone
+import errno
 import io
 import json
 import logging
+import socket
+import ssl
 from email.message import Message
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import urllib.request
 import urllib.response
+from urllib.error import URLError
+from urllib.parse import parse_qs
 
 from offline_guard import offline_boundaries
 
@@ -222,8 +227,12 @@ class OSMTransportTests(unittest.TestCase):
         self.assertIn('OrbTalus', req.get_header('User-agent'))
         self.assertIn('https://github.com/GuilhermeSerafim/orbtalus', req.get_header('User-agent'))
         self.assertEqual(req.get_method(), 'POST')
-        self.assertIn(b'way["waterway"](around:6000,-23,-46)', req.data)
-        self.assertIn(b'relation["waterway"](around:6000,-23,-46)', req.data)
+        self.assertEqual(req.get_header('Accept'), 'application/json')
+        self.assertEqual(req.get_header('Content-type').split(';')[0], 'application/x-www-form-urlencoded')
+        fields = parse_qs(req.data.decode('ascii'), strict_parsing=True)
+        query, = fields['data']
+        self.assertIn('way["waterway"](around:6000,-23,-46)', query)
+        self.assertIn('relation["waterway"](around:6000,-23,-46)', query)
         rivers = self.session.execute.call_args.args[1]
         self.assertEqual((len(rivers), rivers[0]['name'], rivers[0]['type']), (1, 'Rio diagnóstico', 'river'))
         self.assertEqual(rivers[0]['source'], 'osm')
@@ -293,6 +302,31 @@ class OSMTransportTests(unittest.TestCase):
                 self.assertEqual(event['http_status'], expected)
                 self.assertEqual(event['exception_types'], types)
                 self.assertGreaterEqual(event['overpass_elapsed_ms'], 0)
+                if expected is not None:
+                    self.assertNotIn('transport_category', event)
+                    self.assertNotIn('transport_errno', event)
+
+    def test_open_failure_records_only_category_and_numeric_errno_from_urlerror_reason(self):
+        for reason, category, number in (
+            (socket.gaierror(socket.EAI_AGAIN, 'PRIVATE_DNS'), 'dns', socket.EAI_AGAIN),
+            (ssl.SSLError(ssl.SSL_ERROR_SSL, 'PRIVATE_CERTIFICATE'), 'tls', int(ssl.SSL_ERROR_SSL)),
+            (TimeoutError('PRIVATE_TIMEOUT'), 'timeout', None),
+            (ConnectionRefusedError(errno.ECONNREFUSED, 'PRIVATE_HOST'), 'connection', errno.ECONNREFUSED),
+            (OSError(errno.ENETUNREACH, 'PRIVATE_ROUTE'), 'connection', errno.ENETUNREACH),
+            (OSError(502, 'PRIVATE_NOT_HTTP'), 'unknown', 502),
+            (OSError('PRIVATE_ERRNO', 'PRIVATE_PATH'), 'unknown', None),
+            ('PRIVATE_REASON', 'unknown', None),
+        ):
+            with self.subTest(category=category, number=number):
+                self.requests.clear()
+                self.error = URLError(reason)
+                event = self.diagnostic_events()[0]
+                self.assertEqual(event['stage'], 'overpass_open')
+                self.assertIsNone(event['http_status'])
+                self.assertEqual(event.get('transport_category'), category)
+                self.assertEqual(event['transport_errno'], number)
+                self.assertEqual(len(self.requests), 1)
+                self.session.commit.assert_not_called()
 
     def test_http_200_parser_failure_keeps_successful_transport_status(self):
         self.payload = {'elements': [], 'remark': 'runtime error: PRIVATE_REMARK'}

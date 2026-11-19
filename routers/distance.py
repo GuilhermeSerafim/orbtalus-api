@@ -56,6 +56,12 @@ class HydrologyResponse(BaseModel):
     response_model=HydrologyResponse,
     dependencies=[Depends(admit_hydrology_request)],
     summary="Consultar o rio mais próximo sem executar a análise de risco",
+    openapi_extra={"requestBody": {"content": {"application/json": {"example": {
+        "polygon": {"type": "Polygon", "coordinates": [[
+            [-46.6962, -23.5861], [-46.6960, -23.5861], [-46.6960, -23.5859],
+            [-46.6962, -23.5859], [-46.6962, -23.5861],
+        ]]},
+    }}}}},
     responses={
         429: {"description": "Limite diário de consultas hidrográficas da demo atingido."},
         503: {"description": "Cobertura hidrográfica, banco ou serviço da demo indisponível."},

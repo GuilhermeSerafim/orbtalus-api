@@ -96,12 +96,17 @@ antes de criar sessão ou provider. Não há reparação silenciosa da geometria
 
 ### Testar somente a hidrografia
 
-Em `/docs`, abra **POST /geo/hydrology**, clique em **Try it out** e envie um polígono.
+Na raiz desta versão do backend, execute `docker compose -f compose.hydrology.yaml up -d --build`.
+Abra [o Swagger local da hidrografia](http://127.0.0.1:8001/docs), escolha **POST /geo/hydrology**
+e clique em **Try it out**. A porta 8001 usa PostGIS próprio e a consulta real ao OpenStreetMap via
+Overpass. O cache fica no volume deste projeto e é reutilizado após reiniciar. A cota da demo se
+aplica no Render. Para acompanhar a busca, use `docker compose -f compose.hydrology.yaml logs -f api`.
+Para encerrar e manter o cache, use `docker compose -f compose.hydrology.yaml down`.
 Exemplo em PowerShell, com uma pequena área próxima à Marginal Pinheiros em São Paulo:
 
 ```powershell
 $body = '{"polygon":{"type":"Polygon","coordinates":[[[-46.6962,-23.5861],[-46.6960,-23.5861],[-46.6960,-23.5859],[-46.6962,-23.5859],[-46.6962,-23.5861]]]}}'
-Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8000/geo/hydrology' -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8001/geo/hydrology' -ContentType 'application/json' -Body $body
 ```
 
 `consulta` indica se esta chamada consultou o Overpass (`overpass`) ou reaproveitou uma busca anterior (`cache`). `consultado_em` é a data dessa busca. O campo `rio` contém nome, tipo, distância em metros, origem, ID e data de edição na fonte, quando disponível. Em chamadas concorrentes, a escolha do rio usa a cobertura vigente no banco no instante da seleção. Uma resposta 200 com `rio: null` indica que a busca foi válida e não identificou um rio elegível no raio de 5 km. Uma falha ao obter a cobertura retorna 503 com `HYDROLOGY_LOOKUP_FAILED`.

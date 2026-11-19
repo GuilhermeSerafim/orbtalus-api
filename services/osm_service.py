@@ -1,11 +1,15 @@
+import errno
 import json
 import logging
+import socket
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from time import monotonic
 from typing import Literal
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import overpy
@@ -73,8 +77,30 @@ def _exception_chain(error):
     return {'exception_types': types, 'chain_truncated': error is not None}
 
 
+def _open_transport_fields(error):
+    # urllib wraps socket errors in .reason; it may also contain arbitrary text.
+    reason = error.reason if isinstance(error, URLError) else error
+    number = reason.errno if isinstance(reason, OSError) else None
+    if not isinstance(number, int) or isinstance(number, bool) or not -(2**31) <= number < 2**31:
+        number = None
+    if isinstance(reason, (socket.gaierror, socket.herror)):
+        category = 'dns'
+    elif isinstance(reason, ssl.SSLError):
+        category = 'tls'
+    elif isinstance(reason, TimeoutError) or number == errno.ETIMEDOUT:
+        category = 'timeout'
+    elif isinstance(reason, ConnectionError) or number in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+        category = 'connection'
+    else:
+        category = 'unknown'
+    return {'transport_category': category, 'transport_errno': number}
+
+
 def _diagnostic(code, observation, started, error=None):
-    return dict(code=code, **observation,
+    transport = {}
+    if observation['stage'] == 'overpass_open' and isinstance(error, OSError) and not isinstance(error, HTTPError):
+        transport = _open_transport_fields(error)
+    return dict(code=code, **observation, **transport,
                 error_code=(error.code if isinstance(error, ServiceUnavailable)
                             and error.code in MESSAGES else None),
                 elapsed_ms=round((monotonic() - started) * 1000, 3),
@@ -118,8 +144,12 @@ class _OverpassClient:
         try:
             request = Request(
                 'https://overpass-api.de/api/interpreter',
-                data=query.encode('utf-8'),
-                headers={'User-Agent': 'OrbTalus-local/0.1 (+https://github.com/GuilhermeSerafim/orbtalus; development hydrology)'},
+                data=urlencode({'data': query}).encode('ascii'),
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+                    'User-Agent': 'OrbTalus-local/0.1 (+https://github.com/GuilhermeSerafim/orbtalus; development hydrology)',
+                },
             )
             # QL timeout is server-side; this is a separate socket inactivity limit.
             # No retry, fallback endpoint or global opener mutation on refusal.
