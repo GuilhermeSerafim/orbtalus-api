@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from sqlalchemy import inspect, text
+from sqlalchemy import TIMESTAMP, VARCHAR, inspect, text
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
@@ -13,6 +13,31 @@ import models
 from routers.distance import router as distance_router
 from routers.risk import router as risk_router
 from routers.ai_vertical import router as ai_router
+
+
+def _matches_readiness_columns(table, columns):
+    expected = set(table.columns.keys())
+    if columns.keys() == expected:
+        return True
+    # The v1 API can keep serving while the atomic hydrography upgrade adds these columns.
+    if table.name != "water_bodies" or "source" in expected:
+        return False
+    additions = {"source": VARCHAR, "source_id": VARCHAR,
+                 "source_updated_at": TIMESTAMP, "fetched_at": TIMESTAMP}
+    if columns.keys() != expected.union(additions):
+        return False
+    for name, required_type in additions.items():
+        column = columns[name]
+        actual_type = column["type"]
+        if column["nullable"] is not True or not isinstance(actual_type, required_type):
+            return False
+        if required_type is VARCHAR and actual_type.length is not None:
+            return False
+        if required_type is TIMESTAMP and (
+            not actual_type.timezone or getattr(actual_type, "precision", None) is not None
+        ):
+            return False
+    return True
 
 
 def create_app():
@@ -69,7 +94,7 @@ def create_app():
             if same_relation is not True:
                 raise ServiceUnavailable('DATABASE_UNAVAILABLE')
             columns = {column["name"]: column for column in inspector.get_columns(table.name, schema='public')}
-            if set(columns) != set(table.columns.keys()):
+            if not _matches_readiness_columns(table, columns):
                 raise ServiceUnavailable("DATABASE_UNAVAILABLE")
             for expected in table.columns:
                 actual = columns[expected.name]
