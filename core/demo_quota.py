@@ -41,7 +41,7 @@ def client_bucket(request):
     return str(address)
 
 
-def reserve(connection, now, bucket, ip_limit, global_limit):
+def reserve(connection, now, bucket, ip_limit, global_limit, *, prefix=""):
     day = now.date()
     retry_after = 86400 - (now.hour * 3600 + now.minute * 60 + now.second)
     # Global first serializes admissions across workers and deployments. Any
@@ -50,7 +50,7 @@ def reserve(connection, now, bucket, ip_limit, global_limit):
         ("global", global_limit, "DEMO_DAILY_LIMIT", "O limite diario do demo foi atingido."),
         (bucket, ip_limit, "DEMO_IP_LIMIT", "O limite diario deste IP foi atingido."),
     ):
-        if connection.execute(_INCREMENT, {"day": day, "bucket": key, "limit": limit}).scalar_one_or_none() is None:
+        if connection.execute(_INCREMENT, {"day": day, "bucket": prefix + key, "limit": limit}).scalar_one_or_none() is None:
             raise HTTPException(429, {"code": code, "message": message},
                                 headers={"Retry-After": str(retry_after)})
     connection.execute(text("DELETE FROM orbtalus_demo.daily_usage WHERE day < :cutoff"),
@@ -58,6 +58,14 @@ def reserve(connection, now, bucket, ip_limit, global_limit):
 
 
 def admit_demo_request(request: Request, _polygon=Depends(validated_polygon)):
+    _admit(request, prefix="")
+
+
+def admit_hydrology_request(request: Request, _polygon=Depends(validated_polygon)):
+    _admit(request, prefix="hydrology:")
+
+
+def _admit(request, *, prefix):
     if not demo_mode():
         return
     bucket = client_bucket(request)
@@ -68,7 +76,7 @@ def admit_demo_request(request: Request, _polygon=Depends(validated_polygon)):
             raise ValueError
         with get_engine().begin() as connection:
             now = connection.execute(text("SELECT clock_timestamp() AT TIME ZONE 'UTC'")).scalar_one()
-            reserve(connection, now, bucket, ip_limit, global_limit)
+            reserve(connection, now, bucket, ip_limit, global_limit, prefix=prefix)
     except (ValueError, SQLAlchemyError, ServiceUnavailable):
         raise ServiceUnavailable("DEMO_UNAVAILABLE") from None
     if os.environ.get("DEMO_PROVIDERS_ENABLED") != "1":

@@ -39,6 +39,25 @@ class OSMServiceTests(unittest.TestCase):
         self.service.api.query.assert_not_called()
         session.commit.assert_not_called()
 
+    def test_coverage_outcome_reports_the_source_for_each_call(self):
+        cache_time = datetime(2026, 11, 18, tzinfo=timezone.utc)
+        self.service.api.query.return_value = SimpleNamespace(relations=[], ways=[])
+        sessions = [session_with_coverage(cache_time), session_with_coverage()]
+        with patch("services.osm_service.SessionLocal", side_effect=sessions):
+            cached = self.service.ensure_coverage(-23, -46)
+            refreshed = self.service.ensure_coverage(-23, -47)
+        self.assertEqual((cached.origin, cached.fetched_at), ('cache', cache_time))
+        self.assertEqual((refreshed.origin, refreshed.fetched_at), ('overpass', FETCHED_AT))
+        self.service.api.query.assert_called_once()
+
+    def test_coverage_outcome_is_absent_when_refresh_cannot_commit(self):
+        session = session_with_coverage()
+        session.commit.side_effect = RuntimeError('commit failed')
+        self.service.api.query.return_value = SimpleNamespace(relations=[], ways=[])
+        with patch("services.osm_service.SessionLocal", return_value=session):
+            self.assertIsNone(self.service.ensure_coverage(-23, -46))
+        session.rollback.assert_called_once()
+
     def test_six_existing_waterways_do_not_suppress_refresh_without_coverage(self):
         session = session_with_coverage()
         session.query.return_value.filter.return_value.count.return_value = 6

@@ -1,8 +1,10 @@
 import json
 import logging
-from datetime import timedelta, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from time import monotonic
+from typing import Literal
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -13,7 +15,7 @@ from sqlalchemy.orm import Session
 
 import models
 from core.errors import MESSAGES, ServiceUnavailable
-from core.validation import HYDROLOGY_RADIUS_KM
+from core.validation import HYDROLOGY_RADIUS_KM, within_hydrology_radius
 from database import SessionLocal
 from services.text_sanitizer import sanitize_text
 
@@ -42,6 +44,23 @@ def eligible_water_body(lat, lon, *, allow_undated=False):
     if allow_undated:
         return observed | (water.source.is_(None) & cutoff.is_(None))
     return observed
+
+
+def nearest_water_body(db, lat, lon, *, allow_undated=False, include_contact=False):
+    water = models.WaterBody
+    point = f"SRID=4326;POINT({lon} {lat})"
+    columns = [water, func.ST_DistanceSphere(water.geom, point).label("dist_m")]
+    if include_contact:
+        columns.append(func.ST_AsText(func.ST_ClosestPoint(water.geom, point)).label("rio_ponto_wkt"))
+    nearest = (
+        db.query(*columns)
+        .filter(eligible_water_body(lat, lon, allow_undated=allow_undated))
+        .order_by("dist_m", water.id)
+        .first()
+    )
+    if nearest is not None and within_hydrology_radius(nearest[1]):
+        return nearest
+    return None
 
 
 def _exception_chain(error):
@@ -127,11 +146,21 @@ class _OverpassClient:
             observation['overpass_elapsed_ms'] = round((monotonic() - started) * 1000, 3)
 
 
+@dataclass(frozen=True)
+class Coverage:
+    fetched_at: datetime
+    origin: Literal['cache', 'overpass']
+
+
 class OSMService:
     def __init__(self):
         self.api = None
 
     def fetch_and_save_rivers(self, lat: float, lon: float, radius_km: int = HYDROLOGY_RADIUS_KM):
+        coverage = self.ensure_coverage(lat, lon, radius_km)
+        return coverage.fetched_at if coverage is not None else None
+
+    def ensure_coverage(self, lat: float, lon: float, radius_km: int = HYDROLOGY_RADIUS_KM) -> Coverage | None:
         db = None
         # Call-local, also when the same service/client is reused or interleaved.
         started = monotonic()
@@ -173,7 +202,7 @@ class OSMService:
         radius_m = radius_km * 1000
         covered_at = db.query(covering_fetch_time(lat, lon, radius_m)).scalar()
         if covered_at is not None:
-            return covered_at
+            return Coverage(covered_at, 'cache')
 
         fetched_at = db.scalar(select(func.clock_timestamp()))
         fetch_radius = radius_m + FETCH_MARGIN_M
@@ -293,4 +322,4 @@ class OSMService:
         ))
         observation['stage'] = 'db_commit'
         db.commit()
-        return fetched_at
+        return Coverage(fetched_at, 'overpass')

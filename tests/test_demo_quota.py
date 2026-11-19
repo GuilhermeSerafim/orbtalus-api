@@ -4,9 +4,10 @@ from unittest.mock import patch
 
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, literal, select, text
 
 import main
+from core import demo_quota
 from core.demo_quota import client_bucket, reserve
 
 
@@ -46,6 +47,36 @@ class DemoQuotaCounterTests(unittest.TestCase):
                 (b'cf-connecting-ip', address), (b'x-forwarded-for', b'203.0.113.5'),
             ]})
             self.assertEqual(client_bucket(request), '2001:db8:1:2::/64')
+
+    def test_hydrology_and_risk_have_independent_ip_and_global_counters(self):
+        # Replace only the PostgreSQL clock expression for SQLite.
+        @event.listens_for(self.engine, "before_execute", retval=True)
+        def fixed_clock(conn, statement, multiparams, params, execution_options):
+            if "clock_timestamp()" in str(statement):
+                statement = select(literal(datetime(2026, 11, 19, 23, 59, 59)))
+            return statement, multiparams, params
+
+        def request(suffix):
+            address = f"198.51.100.{suffix}".encode()
+            return Request({"type": "http", "headers": [(b"cf-connecting-ip", address)]})
+
+        env = {"RENDER": "true", "DEMO_PROVIDERS_ENABLED": "1",
+               "DEMO_LIMIT_PER_IP": "1", "DEMO_LIMIT_GLOBAL": "2"}
+        with patch.dict("os.environ", env), patch("core.demo_quota.get_engine", return_value=self.engine):
+            for admit in (demo_quota.admit_hydrology_request, demo_quota.admit_demo_request):
+                admit(request(1))
+                with self.assertRaises(HTTPException) as ip:
+                    admit(request(1))
+                self.assertEqual(ip.exception.detail["code"], "DEMO_IP_LIMIT")
+                admit(request(2))
+                with self.assertRaises(HTTPException) as global_cap:
+                    admit(request(3))
+                self.assertEqual(global_cap.exception.detail["code"], "DEMO_DAILY_LIMIT")
+
+        with self.engine.connect() as conn:
+            counts = dict(conn.execute(text("SELECT bucket, used FROM orbtalus_demo.daily_usage")).all())
+        self.assertEqual(counts["global"], 2)
+        self.assertEqual(counts["198.51.100.1"], 1)
 
 
 class DemoQuotaRouteTests(unittest.TestCase):

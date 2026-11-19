@@ -2,7 +2,6 @@ import logging
 
 from fastapi import APIRouter, Depends
 from shapely.geometry import Polygon
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 import models
@@ -10,12 +9,12 @@ from core import RiskCalculator
 from core.demo_quota import admit_demo_request
 from core.errors import ServiceUnavailable
 from core.geometry import get_geo_db, validated_polygon, river_coordinates
-from core.validation import finite_number, within_hydrology_radius
+from core.validation import finite_number
 from providers import MapBiomasAdapter
 from providers.mapbiomas_adapter import MAPBIOMAS_SOIL_CLASSES
 from services.ai_service import get_ai_assessment
 from services.elevation_service import elevation_m
-from services.osm_service import OSMService, eligible_water_body
+from services.osm_service import OSMService, nearest_water_body
 from services.text_sanitizer import sanitize_text
 
 router = APIRouter()
@@ -40,21 +39,8 @@ def risk_api(geom: Polygon = Depends(validated_polygon),
         raise ServiceUnavailable('HYDROLOGY_UNAVAILABLE')
 
     # 2. Query PostGIS for nearest water body and closest contact point.
-    user_point = f"SRID=4326;POINT({lon} {lat})"
-    result = (
-        db.query(
-            models.WaterBody,
-            func.ST_DistanceSphere(models.WaterBody.geom, user_point).label("dist_m"),
-            func.ST_AsText(
-                func.ST_ClosestPoint(models.WaterBody.geom, user_point)
-            ).label("rio_ponto_wkt"),
-        )
-        .filter(eligible_water_body(lat, lon))
-        .order_by("dist_m")
-        .first()
-    )
-
-    if result is None or not within_hydrology_radius(result[1]):
+    result = nearest_water_body(db, lat, lon, include_contact=True)
+    if result is None:
         raise ServiceUnavailable('HYDROLOGY_UNAVAILABLE')
 
     rio, dist_m, rio_ponto_wkt = result

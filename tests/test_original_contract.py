@@ -70,7 +70,7 @@ class OriginalContractTests(RiskTestCase):
         item = copy.deepcopy(POLYGON)
         item['coordinates'].append([[0, 0], [1, 0], [1, 1], [0, 0]])  # hole outside
         invalid.append(item)
-        for route in ('risk', 'distance'):
+        for route in ('risk', 'distance', 'hydrology'):
             for polygon in invalid:
                 with self.subTest(route=route, polygon=polygon):
                     response = self.client.post('/geo/' + route,

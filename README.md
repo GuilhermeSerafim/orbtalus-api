@@ -85,6 +85,7 @@ quando o recurso é solicitado; não ativa provider alternativo.
 | `GET /ready` | Valida PostGIS, as tabelas públicas da versão atual e o índice único dos trechos por fonte. Retorna `scope=local_dependencies` e `providers=not_verified`. |
 | `GET /debug-db` | Conectividade e contagem de rios; erro seguro em falha de DB. |
 | `POST /geo/distance` | Consulta local até 5 km. Usa as observações OSM da cobertura vigente. Na ausência dessa cobertura, consulta apenas o inventário legado sem origem identificada. Retorna 404 se não encontrar um corpo d’água elegível. |
+| `POST /geo/hydrology` | Testa a mesma busca de rio de `/geo/risk`: reaproveita a cobertura vigente ou consulta o Overpass e atualiza o PostGIS. Retorna a origem da consulta, sua data e o rio elegível mais próximo em até 5 km. |
 | `POST /geo/risk` | Exige consulta OSM bem-sucedida e vigente para a área e corpo d’água observado a até 5 km. Se faltar um deles, retorna 503 antes de consultar elevação, MapBiomas ou IA e de gravar uma análise. |
 | `POST /ai/ask-ai` | `{ "pergunta": "..." }` retorna `{ "resposta": { "risk_level": "baixo|medio|alto", "explanation": "..." } }`. |
 
@@ -92,6 +93,22 @@ Risk/distance aceitam `{polygon: Polygon}` ou `{polygon: Feature<Polygon>}`,
 coordenadas `[longitude, latitude]`. Geometria vazia, inválida, fora dos limites,
 anéis abertos/degenerados e valores não numéricos/não finitos retornam 422
 antes de criar sessão ou provider. Não há reparação silenciosa da geometria.
+
+### Testar somente a hidrografia
+
+Em `/docs`, abra **POST /geo/hydrology**, clique em **Try it out** e envie um polígono.
+Exemplo em PowerShell, com uma pequena área próxima à Marginal Pinheiros em São Paulo:
+
+```powershell
+$body = '{"polygon":{"type":"Polygon","coordinates":[[[-46.6962,-23.5861],[-46.6960,-23.5861],[-46.6960,-23.5859],[-46.6962,-23.5859],[-46.6962,-23.5861]]]}}'
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8000/geo/hydrology' -ContentType 'application/json' -Body $body
+```
+
+`consulta` indica se esta chamada consultou o Overpass (`overpass`) ou reaproveitou uma busca anterior (`cache`). `consultado_em` é a data dessa busca. O campo `rio` contém nome, tipo, distância em metros, origem, ID e data de edição na fonte, quando disponível. Em chamadas concorrentes, a escolha do rio usa a cobertura vigente no banco no instante da seleção. Uma resposta 200 com `rio: null` indica que a busca foi válida e não identificou um rio elegível no raio de 5 km. Uma falha ao obter a cobertura retorna 503 com `HYDROLOGY_LOOKUP_FAILED`.
+
+A rota atualiza apenas os dados hidrográficos e, no Render, os contadores próprios da demo. Usa os limites por IP e global configurados em um contador separado do de `/geo/risk`. O teste não consulta elevação, Earth Engine ou IA e não grava uma análise.
+
+### Contrato da análise de risco
 
 Exemplo de request, somente ilustrativo:
 

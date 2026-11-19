@@ -102,6 +102,7 @@ class HydrographyIntegration(unittest.TestCase):
         self.enterContext(patch("routers.risk.get_osm_service", return_value=self.osm))
         app = create_app()
         app.dependency_overrides[admit_demo_request] = lambda: None
+        app.dependency_overrides[OSMService] = lambda: self.osm
         self.client = self.enterContext(TestClient(app))
 
     def scalar(self, sql):
@@ -142,6 +143,46 @@ class HydrographyIntegration(unittest.TestCase):
         self.assertAlmostEqual(distance.json()["distancia_rio_m"], 111, delta=1)
         updated = self.scalar("SELECT source_updated_at FROM water_bodies WHERE source='osm' AND source_id='way/1'")
         self.assertEqual(updated, datetime(2024, 3, 1, 12, tzinfo=timezone.utc))
+
+    def test_hydrology_probe_returns_the_nearest_way_and_reuses_its_receipt(self):
+        providers = [self.enterContext(patch("routers.risk." + name))
+                     for name in ("get_data_provider", "get_ai_assessment", "elevation_m")]
+        self.osm.api.query.return_value = waterways("New Creek", "Further Creek")
+        for source in ("overpass", "cache"):
+            response = self.post("hydrology")
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()
+            self.assertEqual(result["consulta"], source)
+            self.assertEqual(result["raio_m"], 5000)
+            self.assertEqual(datetime.fromisoformat(result["consultado_em"]),
+                             self.scalar("SELECT max(fetched_at) FROM hydrography_fetches"))
+            river = result["rio"]
+            self.assertEqual((river["nome"], river["tipo"], river["fonte"], river["id_fonte"]),
+                             ("New Creek", "stream", "osm", "way/1"))
+            self.assertAlmostEqual(river["distancia_m"], 111, delta=1)
+            self.assertEqual(datetime.fromisoformat(river["atualizado_na_fonte_em"]),
+                             datetime(2024, 3, 1, 12, tzinfo=timezone.utc))
+        self.osm.api.query.assert_called_once()
+        self.assertEqual(self.scalar("SELECT count(*) FROM risk_assessments"), 0)
+        for provider in providers:
+            provider.assert_not_called()
+
+    def test_hydrology_probe_distinguishes_valid_empty_from_failed_refresh(self):
+        self.osm.api.query.return_value = waterways()
+        for source in ("overpass", "cache"):
+            response = self.post("hydrology")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["consulta"], source)
+            self.assertIsNone(response.json()["rio"])
+        self.osm.api.query.assert_called_once()
+        self.expire()
+        old_receipt = self.scalar("SELECT max(fetched_at) FROM hydrography_fetches")
+        self.osm.api.query.side_effect = TimeoutError("simulated outage")
+        response = self.post("hydrology")
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "HYDROLOGY_LOOKUP_FAILED")
+        self.assertEqual(self.scalar("SELECT max(fetched_at) FROM hydrography_fetches"), old_receipt)
+        self.assertEqual(self.scalar("SELECT count(*) FROM risk_assessments"), 0)
 
     def test_empty_coverage_is_cached_for_fully_contained_disks_only(self):
         self.osm.api.query.return_value = waterways()
