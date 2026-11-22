@@ -14,6 +14,7 @@ core/**
 !core/config.py
 !core/db_target.py
 !core/demo_quota.py
+!core/request_trace.py
 !core/errors.py
 !core/geometry.py
 !core/risk_calculator.py
