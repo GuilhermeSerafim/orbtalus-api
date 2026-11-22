@@ -36,12 +36,12 @@ def risk_api(geom: Polygon = Depends(validated_polygon),
     lon, lat = rep.x, rep.y
 
     if get_osm_service().fetch_and_save_rivers(lat, lon) is None:
-        raise ServiceUnavailable('HYDROLOGY_UNAVAILABLE')
+        raise ServiceUnavailable('HYDROLOGY_LOOKUP_FAILED')
 
     # 2. Query PostGIS for nearest water body and closest contact point.
     result = nearest_water_body(db, lat, lon, include_contact=True)
     if result is None:
-        raise ServiceUnavailable('HYDROLOGY_UNAVAILABLE')
+        raise ServiceUnavailable('HYDROLOGY_NO_WATERWAY')
 
     rio, dist_m, rio_ponto_wkt = result
     rio_nome = (

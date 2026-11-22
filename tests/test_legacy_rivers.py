@@ -13,7 +13,7 @@ class LegacyRiverTests(RiskTestCase):
             self.db.query.return_value.order_by.return_value.first.return_value = (river, 12, 'POINT(-46 -23)')
             response = self.post_risk()
         self.assertEqual(response.status_code, 503, response.text)
-        self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_UNAVAILABLE')
+        self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_LOOKUP_FAILED')
         self.elevation.assert_not_called()
         self.provider_factory.assert_not_called()
         self.assert_no_analysis()

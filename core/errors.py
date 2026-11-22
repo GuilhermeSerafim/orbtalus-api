@@ -1,6 +1,7 @@
 """Public errors use a fixed allowlist; never expose upstream exception text."""
 MESSAGES = {
     "HYDROLOGY_LOOKUP_FAILED": "Não foi possível consultar a hidrografia desta área.",
+    "HYDROLOGY_NO_WATERWAY": "A consulta não encontrou rio ou córrego mapeado em um raio de 5 km do ponto analisado.",
     "HYDROLOGY_UNAVAILABLE": "Hidrografia local insuficiente para classificar o risco nesta área.",
     "DEMO_UNAVAILABLE": "Demo temporariamente indisponivel. Tente novamente mais tarde.",
     "INPUT_INVALID": "Área de análise inválida. Revise a seleção.",

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 import models
 from core.errors import MESSAGES, ServiceUnavailable
+from core.request_trace import current_trace
 from core.validation import HYDROLOGY_RADIUS_KM, within_hydrology_radius
 from database import SessionLocal
 from services.text_sanitizer import sanitize_text
@@ -109,6 +110,9 @@ def _diagnostic(code, observation, started, error=None):
 
 def _log_diagnostic(event):
     # Message text survives the API's message-only formatter; no reliance on extra.
+    trace = current_trace.get()
+    if trace is not None:
+        event = dict(event, request_id=trace.request_id)
     logger.warning('OSM diagnostic %s', json.dumps(event, sort_keys=True))
 
 
@@ -196,10 +200,18 @@ class OSMService:
         started = monotonic()
         observation = dict(stage='db_session', http_status=None, overpass_elapsed_ms=None)
         primary = None
+        trace = current_trace.get()
+        if trace is not None:
+            trace.origin = 'unknown'
         try:
             db = SessionLocal()
-            return self._fetch_and_save_rivers(db, lat, lon, radius_km, observation, started)
+            coverage = self._fetch_and_save_rivers(db, lat, lon, radius_km, observation, started)
+            if trace is not None and coverage is not None:
+                trace.origin = coverage.origin
+            return coverage
         except Exception as error:
+            if trace is not None:
+                trace.failure_stage = observation['stage']
             primary = _diagnostic('OSM_ENRICHMENT_FAILED', observation, started, error)
             _log_diagnostic(primary)
             if db is not None:

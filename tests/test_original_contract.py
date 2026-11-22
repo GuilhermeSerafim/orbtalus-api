@@ -93,7 +93,7 @@ class OriginalContractTests(RiskTestCase):
         self.db.query.return_value.order_by.return_value.first.return_value = None
         response = self.post_risk()
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_UNAVAILABLE')
+        self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_NO_WATERWAY')
         self.assertEqual(self.client.post('/geo/distance', json={'polygon': POLYGON}).status_code, 404)
         self.elevation.assert_not_called()
         self.provider_factory.assert_not_called()
@@ -108,7 +108,7 @@ class OriginalContractTests(RiskTestCase):
                 first.return_value = (river, meters, contact)
                 response = self.post_risk()
                 self.assertEqual(response.status_code, 503, response.text)
-                self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_UNAVAILABLE')
+                self.assertEqual(response.json()['detail']['code'], 'HYDROLOGY_NO_WATERWAY')
                 self.elevation.assert_not_called()
                 self.provider_factory.assert_not_called()
                 self.assert_no_analysis()

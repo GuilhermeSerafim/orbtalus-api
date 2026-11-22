@@ -2,12 +2,15 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from core.config import get_settings
 from core.demo_quota import demo_mode
 from core.errors import MESSAGES, ServiceUnavailable
+from core.request_trace import HEADER, RequestTraceMiddleware, record_failure
 from database import get_db
 import models
 from routers.distance import router as distance_router
@@ -21,22 +24,32 @@ def create_app(*, hydrology_only=False):
         description="Plataforma global e agnóstica para análise de risco hidrológico com foco em resiliência",
         version="2.0.0",
     )
+    app.add_middleware(RequestTraceMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(get_settings().cors_origins),
         allow_credentials=False,
         allow_methods=["POST", "OPTIONS"],
         allow_headers=["Content-Type"],
+        expose_headers=[HEADER],
     )
 
     @app.exception_handler(ServiceUnavailable)
     async def service_unavailable(request, error):
+        record_failure(error.code)
         return JSONResponse(status_code=503, content={"detail": error.detail})
 
     @app.exception_handler(RequestValidationError)
     async def input_invalid(request, error):
+        record_failure('INPUT_INVALID')
         return JSONResponse(status_code=422, content={'detail': {
             'code': 'INPUT_INVALID', 'message': MESSAGES['INPUT_INVALID']}})
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request, error):
+        if isinstance(error.detail, dict):
+            record_failure(error.detail.get('code'))
+        return await http_exception_handler(request, error)
 
     app.include_router(distance_router, prefix="/geo", tags=["Geoprocessamento"])
     if not hydrology_only:
