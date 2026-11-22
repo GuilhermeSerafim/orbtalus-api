@@ -118,7 +118,7 @@ class MapBiomasAdapter(DataProvider):
     def name(self) -> str:
         return "MapBiomas (GEE)"
 
-    def get_soil_data(self, lat: float, lon: float) -> SoilData:
+    def get_soil_data(self, lat: float, lon: float) -> SoilData | None:
         """
         Fetch soil/land cover data from MapBiomas Collection 8.
 
@@ -154,6 +154,8 @@ class MapBiomasAdapter(DataProvider):
 
             # Get the class value
             class_value = sample.get("classification_2022").getInfo()
+            if class_value is None:
+                return None
 
             finite_number(class_value)
             if class_value not in MAPBIOMAS_SOIL_CLASSES:
@@ -194,7 +196,7 @@ class MapBiomasAdapter(DataProvider):
 
         raise ServiceUnavailable("DATA_UNAVAILABLE")
 
-    def get_water_frequency(self, lat: float, lon: float) -> WaterData:
+    def get_water_frequency(self, lat: float, lon: float) -> WaterData | None:
         """
         Fetch 30-year water frequency from MapBiomas Water Collection.
 
@@ -238,6 +240,8 @@ class MapBiomasAdapter(DataProvider):
 
             # Get the computed value
             frequency_value = sample.get(band_name).getInfo()
+            if frequency_value is None:
+                return None
 
             # MapBiomas water frequency is 0-100 (percentage of years with water)
             # Convert to years out of 30 — use round() to avoid truncation

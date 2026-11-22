@@ -70,6 +70,13 @@ class RequestTraceTests(RiskTestCase):
         self.assertEqual(diagnostic['request_id'], event['request_id'])
         self.assertIsNone(diagnostic['http_status'])
 
+    def test_partial_coverage_is_identifiable_by_receipt(self):
+        self.provider.get_water_frequency.return_value = None
+        response, event, _ = self.post('/geo/risk')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(event['missing_indicators'], ['water_frequency'])
+        self.assertIsNone(event['failure_code'])
+
     def test_later_failure_retains_origin(self):
         self.osm.return_value = OSMService()
         self.ai.side_effect = ServiceUnavailable('AI_UNAVAILABLE')

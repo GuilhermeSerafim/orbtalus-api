@@ -172,8 +172,8 @@ class OriginalContractTests(RiskTestCase):
     def test_invalid_environmental_structure_and_domains_never_calculate(self):
         original_soil = self.provider.get_soil_data.return_value
         original_water = self.provider.get_water_frequency.return_value
-        cases = [('get_soil_data', value) for value in (None, {}, [], {'class_id': 3})]
-        cases += [('get_water_frequency', value) for value in (None, {}, [], {'frequency_years': 0})]
+        cases = [('get_soil_data', value) for value in ({}, [], {'class_id': 3})]
+        cases += [('get_water_frequency', value) for value in ({}, [], {'frequency_years': 0})]
         for key, values, original, method in (
             ('is_permeable', (None, 0, 1, 'true', False), original_soil, 'get_soil_data'),
             ('class_id', (0, 999, 3.5), original_soil, 'get_soil_data'),
