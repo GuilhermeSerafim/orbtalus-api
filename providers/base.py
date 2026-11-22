@@ -29,7 +29,7 @@ class DataProvider(ABC):
     """
 
     @abstractmethod
-    def get_soil_data(self, lat: float, lon: float) -> SoilData:
+    def get_soil_data(self, lat: float, lon: float) -> SoilData | None:
         """
         Fetch soil classification data for coordinates.
 
@@ -38,7 +38,7 @@ class DataProvider(ABC):
             lon: Longitude in decimal degrees
 
         Returns:
-            SoilData with classification and permeability
+            SoilData with classification and permeability, or None if unsampled
 
         Raises:
             Exception: If data cannot be retrieved
@@ -46,7 +46,7 @@ class DataProvider(ABC):
         pass
 
     @abstractmethod
-    def get_water_frequency(self, lat: float, lon: float) -> WaterData:
+    def get_water_frequency(self, lat: float, lon: float) -> WaterData | None:
         """
         Fetch historical water frequency data for coordinates.
 
@@ -55,7 +55,7 @@ class DataProvider(ABC):
             lon: Longitude in decimal degrees
 
         Returns:
-            WaterData with frequency (0-30 years)
+            WaterData with frequency (0-30 years), or None if unsampled
 
         Raises:
             Exception: If data cannot be retrieved

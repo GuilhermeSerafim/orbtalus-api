@@ -84,7 +84,7 @@ class ProviderTests(unittest.TestCase):
             self.sdk.Initialize.assert_not_called()
 
     def test_soil_requires_a_known_integral_finite_class(self):
-        for value in (None, float('nan'), float('inf'), -float('inf'), True, False,
+        for value in (float('nan'), float('inf'), -float('inf'), True, False,
                       0, 999, 3.5, '3', {}, []):
             with self.subTest(value=value):
                 self.sample.get.return_value.getInfo.return_value = value
@@ -135,7 +135,7 @@ class ProviderTests(unittest.TestCase):
             self.sample.get.assert_called_with(name)
 
     def test_water_requires_finite_percentage_and_preserves_real_zero(self):
-        for value in (None, float('nan'), float('inf'), -float('inf'), True, False,
+        for value in (float('nan'), float('inf'), -float('inf'), True, False,
                       -1, 101, '0', {}, []):
             with self.subTest(value=value):
                 self.sample.get.return_value.getInfo.return_value = value

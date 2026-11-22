@@ -147,11 +147,18 @@ Exemplo de formato HTTP 200, ilustrativo, **não resultado de provider real**:
 }
 ```
 
-Sem envelope novo, ID persistido ou colunas de proveniência. Zero real de água
-ou elevação é válido; elevações `(0,8)` produzem queda `-8`, e `(0,0)` produzem
-`0`. O tipo original da queda permanece number|null, mas o fluxo não calcula
-sucesso com elevação obrigatória ausente. A classificação vem da calculadora
-original, e o parecer da IA é obrigatório; não há narrativa substituta.
+Na análise completa, a calculadora determina a classificação e a IA produz o parecer.
+Uma frequência de água medida em zero é válida. A diferença entre elevações
+`(0,8)` é `-8` e entre `(0,0)` é `0`.
+
+Quando uma consulta MapBiomas termina e retorna uma amostra nula, a API devolve
+HTTP 200 com `analysis_status: "partial"`. A lista `missing_indicators` identifica
+`soil`, `water_frequency` ou ambos. Em `environmental_data`, cada indicador ausente
+vale `null` e `provider_status` vale `"partial"`. Rio, distância, queda relativa e
+indicadores medidos acompanham a resposta. Os campos `risk_level`, `risk_calculation`
+e `resposta_ia` valem `null`. A rota encerra antes de chamar a IA ou gravar uma
+avaliação de risco. O registro `Geo request` inclui os nomes dos indicadores ausentes.
+Falhas de serviço e medições inválidas seguem os erros abaixo.
 
 Erros conhecidos usam mensagens fixas, sem eco do input, DSN, token ou traceback:
 
