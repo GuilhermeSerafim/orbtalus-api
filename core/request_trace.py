@@ -35,6 +35,7 @@ def record_failure(code):
                 'INPUT_INVALID': 'validation', 'DEMO_UNAVAILABLE': 'admission',
                 'DEMO_DAILY_LIMIT': 'admission', 'DEMO_IP_LIMIT': 'admission',
                 'HYDROLOGY_UNAVAILABLE': 'hydrology', 'HYDROLOGY_LOOKUP_FAILED': 'hydrology',
+                'HYDROLOGY_NO_WATERWAY': 'hydrology',
                 'DATABASE_UNAVAILABLE': 'database', 'AI_UNAVAILABLE': 'ai',
                 'DATA_UNAVAILABLE': 'data', 'CONFIG_UNAVAILABLE': 'configuration',
             }.get(code)

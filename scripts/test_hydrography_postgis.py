@@ -118,13 +118,13 @@ class HydrographyIntegration(unittest.TestCase):
                 [-0.001, 0.001], [-0.001, -0.001]]
         return self.client.post('/geo/' + route, json={"polygon": {"type": "Polygon", "coordinates": [ring]}})
 
-    def assert_risk_unavailable_before_providers(self):
+    def assert_risk_unavailable_before_providers(self, expected_code):
         with ExitStack() as stack:
             providers = [stack.enter_context(patch("routers.risk." + name))
                          for name in ("get_data_provider", "get_ai_assessment", "elevation_m")]
             response = self.post("risk")
             self.assertEqual(response.status_code, 503, response.text)
-            self.assertEqual(response.json()["detail"]["code"], "HYDROLOGY_UNAVAILABLE")
+            self.assertEqual(response.json()["detail"]["code"], expected_code)
             for provider in providers:
                 provider.assert_not_called()
         self.assertEqual(self.scalar("SELECT count(*) FROM risk_assessments"), 0)
@@ -224,7 +224,7 @@ class HydrographyIntegration(unittest.TestCase):
         self.expire()
         stamp = self.scalar("SELECT max(fetched_at) FROM hydrography_fetches")
         self.osm.api.query.side_effect = TimeoutError("simulated outage")
-        self.assert_risk_unavailable_before_providers()
+        self.assert_risk_unavailable_before_providers("HYDROLOGY_LOOKUP_FAILED")
         self.assertEqual(self.scalar("SELECT max(fetched_at) FROM hydrography_fetches"), stamp)
         self.assertEqual(self.post("distance").status_code, 404)
         self.osm.api.query.side_effect = None
@@ -270,7 +270,7 @@ class HydrographyIntegration(unittest.TestCase):
             return waterways("Obsolete")
 
         self.osm.api.query.side_effect = release_older_response
-        self.assert_risk_unavailable_before_providers()
+        self.assert_risk_unavailable_before_providers("HYDROLOGY_NO_WATERWAY")
 
 
 if __name__ == "__main__":

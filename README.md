@@ -160,9 +160,12 @@ Erros conhecidos usam mensagens fixas, sem eco do input, DSN, token ou traceback
 | 422 | `INPUT_INVALID` | Área de análise inválida. Revise a seleção. |
 | 503 | `CONFIG_UNAVAILABLE` | Serviço de análise indisponível. Tente novamente mais tarde. |
 | 503 | `DATA_UNAVAILABLE` | Dados necessários à análise estão indisponíveis. Tente novamente mais tarde. |
-| 503 | `HYDROLOGY_UNAVAILABLE` | Hidrografia local insuficiente para classificar o risco nesta área. |
+| 503 | `HYDROLOGY_LOOKUP_FAILED` | Não foi possível consultar a hidrografia desta área. |
+| 503 | `HYDROLOGY_NO_WATERWAY` | A consulta não encontrou rio ou córrego mapeado em um raio de 5 km do ponto analisado. |
 | 503 | `DATABASE_UNAVAILABLE` | Não foi possível concluir a análise. Tente novamente mais tarde. |
 | 503 | `AI_UNAVAILABLE` | Parecer técnico indisponível. Tente novamente mais tarde. |
+
+Nas respostas tratadas dos POSTs `/geo/risk` e `/geo/hydrology`, o header `X-Request-ID` permite localizar a consulta nos logs. Procure esse ID em `Geo request` para ver rota, duração, status e origem da cobertura (`cache` ou `overpass`, quando conhecida). Se a busca falhou, o mesmo ID liga o registro a `OSM diagnostic`, com a etapa e o status HTTP externo quando disponível. Versões anteriores da análise usavam `HYDROLOGY_UNAVAILABLE` tanto para falha na busca quanto para consulta sem rio elegível.
 
 ```json
 {"detail":{"code":"DATA_UNAVAILABLE","message":"Dados necessários à análise estão indisponíveis. Tente novamente mais tarde."}}
